@@ -1,0 +1,169 @@
+// src/pages/ComplianceDash.jsx
+import React, { useState } from 'react';
+import { api } from '../utils/api.js';
+import { fmt, fmtDate, DaysBadge, StatusBadge, Modal, FG, Alert, useData } from '../components/UI.jsx';
+
+const STAGES = ['Initiated', 'Operations_Confirmed', 'Accounts_Processing', 'Released'];
+const STAGE_LABELS = {
+  Initiated: 'Compliance → Ops',
+  Operations_Confirmed: 'Ops → Accounts',
+  Accounts_Processing: 'Accounts → Admin',
+  Released: 'Complete ✓',
+};
+
+export default function ComplianceDash() {
+  const { data: vehicles, loading } = useData(() => api.getVehicles());
+  const { data: compPayments, reload } = useData(() => api.getRequests('?category=COMPLIANCE'));
+  const [showUpload, setShowUpload] = useState(null);
+  const [form, setForm] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const f = (k, v) => setForm(p => ({ ...p, [k]: v }));
+
+  const docAlerts = (vehicles || []).filter(v => {
+    const dates = [v.insurance_expiry, v.roadworthy_expiry, v.hackney_expiry, v.registration_expiry].filter(Boolean);
+    return dates.some(d => Math.ceil((new Date(d) - new Date()) / 86400000) <= 30);
+  });
+
+  const submitUpload = async () => {
+    if (!form.plate || !form.doc_type || !form.expiry_date) { setErr('Required fields missing.'); return; }
+    setSaving(true); setErr('');
+    try {
+      const fd = new FormData();
+      Object.entries(form).forEach(([k, v]) => fd.append(k, v));
+      const veh = (vehicles||[]).find(v => v.plate === form.plate);
+      if (veh) await api.uploadVehicleDoc(veh.id, fd);
+      setShowUpload(null); setForm({});
+    } catch (e) { setErr(e.message); }
+    setSaving(false);
+  };
+
+  const advance = async (id) => {
+    try { await api.approveRequest(id); reload(); } catch (e) { alert(e.message); }
+  };
+
+  const dsStatus = (dateStr) => {
+    if (!dateStr) return { label: '—', cls: 'badge-muted', blink: false };
+    const d = Math.ceil((new Date(dateStr) - new Date()) / 86400000);
+    if (d < 0) return { label: 'Expired', cls: 'badge-danger badge-blink', blink: true };
+    if (d <= 30) return { label: `${d}d`, cls: 'badge-warn badge-blink', blink: true };
+    return { label: `${d}d`, cls: 'badge-ok', blink: false };
+  };
+
+  if (loading) return <div className="loading-page"><div className="spinner"></div></div>;
+
+  return (
+    <div className="page-content">
+      <div>
+        <h1 style={{ fontSize: 18, fontWeight: 700 }}>Compliance dashboard</h1>
+        <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>Vehicle document matrix, tyre checks, 30-day alerts, compliance payment pipeline</p>
+      </div>
+
+      {docAlerts.length > 0 && (
+        <Alert type="warning" blink>
+          <strong>{docAlerts.length} vehicles with documents expiring within 30 days</strong> — also flashing on Admin and assigned driver dashboards
+        </Alert>
+      )}
+
+      <div className="kpi-grid-3">
+        {[
+          ['Vehicles tracked', (vehicles||[]).length, 'All depots'],
+          ['Doc expiry alerts', docAlerts.length, '≤30 days'],
+          ['Active checks', (vehicles||[]).filter(v=>v.status==='Active').length, 'Active vehicles'],
+        ].map(([l,v,s]) => (
+          <div key={l} className="kpi-card"><div className="kpi-label">{l}</div><div className="kpi-value">{v}</div><div className="kpi-sub">{s}</div></div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">Vehicle document compliance matrix</span>
+          <button className="btn btn-sm" onClick={() => { setShowUpload(true); setForm({}); setErr(''); }}>
+            <i className="ti ti-upload"></i> Upload doc
+          </button>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="table" style={{ minWidth: 600 }}>
+            <thead>
+              <tr>
+                <th>Plate</th><th>Category</th><th>Insurance</th><th>Roadworthy</th><th>Hackney</th><th>Registration</th><th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(vehicles||[]).map(v => {
+                const docs = [
+                  dsStatus(v.insurance_expiry),
+                  dsStatus(v.roadworthy_expiry),
+                  dsStatus(v.hackney_expiry),
+                  dsStatus(v.registration_expiry),
+                ];
+                return (
+                  <tr key={v.id}>
+                    <td style={{ fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600 }}>{v.plate}</td>
+                    <td><span className="badge badge-muted" style={{ fontSize: 9 }}>{v.category}</span></td>
+                    {docs.map((s, i) => (
+                      <td key={i}><span className={`badge ${s.cls}`}>{s.label}</span></td>
+                    ))}
+                    <td><StatusBadge status={v.status} /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">Compliance payment pipeline</span>
+          <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Compliance → Ops → Accounts → Admin release</span>
+        </div>
+        {(compPayments||[]).map(p => (
+          <div key={p.id} style={{ display:'flex',alignItems:'center',gap:10,padding:'9px 14px',borderBottom:'1px solid var(--border)',fontSize:11 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 500 }}>{p.ref_number} — {p.description}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>{p.requester_name} · {fmtDate(p.created_at)}</div>
+            </div>
+            <span style={{ fontWeight: 500 }}>{fmt(p.amount_to_pay)}</span>
+            <span className="badge badge-info">{STAGE_LABELS[p.status] || p.status}</span>
+            {p.status !== 'Released' && (
+              <button className="btn btn-primary btn-sm" onClick={() => advance(p.id)}>Advance →</button>
+            )}
+          </div>
+        ))}
+        {!(compPayments||[]).length && (
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 11 }}>No active compliance payments</div>
+        )}
+      </div>
+
+      {showUpload && (
+        <Modal title="Upload / update vehicle document" onClose={() => setShowUpload(null)}
+          footer={<>
+            <button className="btn" onClick={() => setShowUpload(null)}>Cancel</button>
+            <button className="btn btn-primary" onClick={submitUpload} disabled={saving}>{saving ? 'Saving…' : 'Save & update'}</button>
+          </>}>
+          {err && <Alert type="danger">{err}</Alert>}
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 10 }}>
+            Expiry flag resets to new date across all dashboards instantly on save.
+          </div>
+          <div className="form-grid-2">
+            <FG label="Vehicle plate" required>
+              <select value={form.plate||''} onChange={e=>f('plate',e.target.value)}>
+                <option value="">Select plate…</option>
+                {(vehicles||[]).map(v => <option key={v.id}>{v.plate}</option>)}
+              </select>
+            </FG>
+            <FG label="Document type" required>
+              <select value={form.doc_type||''} onChange={e=>f('doc_type',e.target.value)}>
+                <option value="">Select type…</option>
+                {['Insurance','Road worthiness','Hackney permit','Registration','Other'].map(t => <option key={t}>{t}</option>)}
+              </select>
+            </FG>
+          </div>
+          <FG label="New expiry date" required><input type="date" value={form.expiry_date||''} onChange={e=>f('expiry_date',e.target.value)} /></FG>
+          <FG label="File attachment" required><input type="file" accept=".pdf,image/*" onChange={e=>f('file',e.target.files[0])} /></FG>
+        </Modal>
+      )}
+    </div>
+  );
+}

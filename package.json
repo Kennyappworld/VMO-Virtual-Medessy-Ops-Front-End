@@ -1,0 +1,252 @@
+// src/pages/DriverPortal.jsx
+import React, { useState } from 'react';
+import { api } from '../utils/api.js';
+import { fmt, fmtDate, fmtDateTime, DaysBadge, StatusBadge, Modal, FG, Alert, useData } from '../components/UI.jsx';
+import { useAuth } from '../contexts/AuthContext.jsx';
+
+const BANKS = ['Opay','GTBank','Zenith Bank','Access Bank','UBA','FirstBank','Union Bank','Moniepoint','Wema Bank'];
+const STATIONS = ['AP Lekki (Partner)','Northwest (Partner)','Total Apapa','Access Hydrogen','Conoil Ojota','Other (enter account below)'];
+
+export default function DriverPortal() {
+  const { user } = useAuth();
+  const { data: profile, loading } = useData(() => api.getDriver(user?.driver_id || 'me'));
+  const { data: requests, reload: reloadReqs } = useData(() => api.getRequests('?mine=1'));
+  const { data: fuelReqs, reload: reloadFuel } = useData(() => api.getFuelRequests('?mine=1'));
+  const { data: notifs, reload: reloadNotifs } = useData(() => api.getNotifications());
+  const { data: reservations } = useData(() => api.getReservations('?driver=me'));
+
+  const [showFuel, setShowFuel] = useState(false);
+  const [showDispatch, setShowDispatch] = useState(false);
+  const [form, setForm] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const [useAlt, setUseAlt] = useState(false);
+
+  const f = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  const d = profile || {};
+  const licDays = d.licence_expiry ? Math.ceil((new Date(d.licence_expiry) - new Date()) / 86400000) : null;
+
+  const submitFuel = async () => {
+    if (!form.station_name || !form.quantity || !form.tagged_approvers) { setErr('Fill all required fields.'); return; }
+    setSaving(true); setErr('');
+    try {
+      await api.createFuelReq({ ...form, vehicle_id: d.vehicle_id, fuel_type: d.fuel_type || 'Petrol' });
+      setShowFuel(false); setForm({}); reloadFuel();
+    } catch (e) { setErr(e.message); }
+    setSaving(false);
+  };
+
+  const submitDispatch = async () => {
+    if (!form.description || !form.amount_to_pay || !form.tagged_approvers) { setErr('Fill all required fields.'); return; }
+    setSaving(true); setErr('');
+    try {
+      const acct = useAlt ? form.alt_account : `${d.account_number} ${d.bank_name}`;
+      await api.createRequest({
+        ...form,
+        category: form.category || 'DISPATCH/ACCOMMODATION',
+        payee: d.full_name,
+        account_details: acct,
+        amount_to_pay: form.amount_to_pay,
+        total_value: form.amount_to_pay,
+      });
+      setShowDispatch(false); setForm({}); setUseAlt(false); reloadReqs();
+    } catch (e) { setErr(e.message); }
+    setSaving(false);
+  };
+
+  const markNotifsRead = async () => {
+    try { await api.readAllNotifs(); reloadNotifs(); } catch {}
+  };
+
+  if (loading) return <div className="loading-page"><div className="spinner"></div></div>;
+
+  const vehDocs = [
+    { label: 'Insurance', date: d.vehicle_insurance_expiry },
+    { label: 'Roadworthiness', date: d.vehicle_roadworthy_expiry },
+    { label: 'Hackney permit', date: d.vehicle_hackney_expiry },
+    { label: 'Registration', date: d.vehicle_registration_expiry },
+  ];
+
+  return (
+    <div className="page-content">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 style={{ fontSize: 18, fontWeight: 700 }}>Driver portal — {d.full_name || user?.name}</h1>
+          <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+            {d.plate || '—'} · {d.depot || '—'} depot · {d.fuel_type || 'Petrol'}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" onClick={() => { setShowFuel(true); setForm({}); setErr(''); }}>
+            <i className="ti ti-gas-station"></i> Request fuel
+          </button>
+          <button className="btn" onClick={() => { setShowDispatch(true); setForm({}); setErr(''); setUseAlt(false); }}>
+            <i className="ti ti-map-pin"></i> Dispatch / accommodation
+          </button>
+        </div>
+      </div>
+
+      {/* Flags */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {licDays !== null && licDays <= 30 && (
+          <Alert type={licDays <= 7 ? 'danger' : 'warning'} blink>
+            <strong>Licence expiring in {licDays} days ({fmtDate(d.licence_expiry)})</strong> — This alert is also visible to HR and Admin. Submit renewal documents to HR immediately.
+          </Alert>
+        )}
+        {vehDocs.some(v => v.date && Math.ceil((new Date(v.date) - new Date()) / 86400000) <= 30) && (
+          <Alert type="warning" blink>
+            <strong>Vehicle document{vehDocs.filter(v=>v.date&&Math.ceil((new Date(v.date)-new Date())/86400000)<=30).length > 1 ? 's' : ''} expiring soon</strong> — Notify compliance officer to renew {d.plate} documents.
+          </Alert>
+        )}
+        {(reservations||[]).length > 0 && (
+          <Alert type="info">
+            <strong>Active pool car booking</strong> — You have an active reservation: {(reservations||[])[0]?.start_date} to {(reservations||[])[0]?.end_date}
+          </Alert>
+        )}
+      </div>
+
+      <div className="kpi-grid-3">
+        {[
+          ['Total trips', d.trip_count || 0, 'All time'],
+          ['Allowances drawn', fmt(d.total_allowances || 0), 'All time'],
+          ['Fuel drawn', fmt(d.total_fuel_value || 0), 'All time'],
+        ].map(([l,v,s]) => (
+          <div key={l} className="kpi-card"><div className="kpi-label">{l}</div><div className="kpi-value" style={{fontSize:16}}>{v}</div><div className="kpi-sub">{s}</div></div>
+        ))}
+      </div>
+
+      <div className="grid-2">
+        {/* Notifications */}
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">My notifications</span>
+            <button className="btn btn-sm" onClick={markNotifsRead}>Mark all read</button>
+          </div>
+          {(notifs||[]).slice(0,10).map(n => (
+            <div key={n.id} style={{ display:'flex',gap:10,padding:'8px 14px',borderBottom:'1px solid var(--border)',cursor:'pointer',background:n.is_read?'transparent':'var(--bg-highlight)' }}>
+              <div style={{ width:28,height:28,borderRadius:'50%',background:'var(--bg-secondary)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0 }}>
+                <i className={`ti ${n.icon||'ti-bell'}`} style={{ fontSize:13 }}></i>
+              </div>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ fontSize:11,fontWeight:n.is_read?400:600 }}>{n.title}</div>
+                <div style={{ fontSize:10,color:'var(--text-secondary)' }}>{n.body}</div>
+                <div style={{ fontSize:9,color:'var(--text-tertiary)',marginTop:2 }}>{fmtDateTime(n.created_at)}</div>
+              </div>
+              {!n.is_read && <div style={{ width:6,height:6,borderRadius:'50%',background:'var(--danger)',flexShrink:0,marginTop:4 }}></div>}
+            </div>
+          ))}
+          {!(notifs||[]).length && <div style={{ padding:20,textAlign:'center',color:'var(--text-tertiary)',fontSize:11 }}>No notifications</div>}
+        </div>
+
+        {/* My requests */}
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">My requests</span>
+          </div>
+          <table className="table">
+            <thead><tr><th>Ref</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead>
+            <tbody>
+              {[...(requests||[]), ...(fuelReqs||[])].slice(0,8).map(r => (
+                <tr key={r.id}>
+                  <td style={{ fontFamily:'var(--mono)',fontSize:10 }}>{r.ref_number}</td>
+                  <td style={{ fontSize:11 }}>{(r.description||r.station_name||'—').slice(0,30)}</td>
+                  <td style={{ fontWeight:500 }}>{fmt(r.amount_to_pay || r.total_value)}</td>
+                  <td><StatusBadge status={r.status} /></td>
+                </tr>
+              ))}
+              {![...(requests||[]),...(fuelReqs||[])].length && (
+                <tr><td colSpan={4} style={{ textAlign:'center',color:'var(--text-tertiary)',padding:16 }}>No requests yet</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Vehicle documents */}
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">My vehicle documents — {d.plate || '—'}</span>
+        </div>
+        {vehDocs.map(doc => (
+          <div key={doc.label} style={{ display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 14px',borderBottom:'1px solid var(--border)',fontSize:11 }}>
+            <span>{doc.label}</span>
+            <span style={{ fontSize:10,color:'var(--text-secondary)' }}>{fmtDate(doc.date)}</span>
+            <DaysBadge date={doc.date} />
+          </div>
+        ))}
+      </div>
+
+      {/* Fuel Request Modal */}
+      {showFuel && (
+        <Modal title={`Fuel request — ${d.full_name || 'Driver'}`} onClose={() => setShowFuel(false)}
+          footer={<>
+            <button className="btn" onClick={() => setShowFuel(false)}>Cancel</button>
+            <button className="btn btn-primary" onClick={submitFuel} disabled={saving}>{saving ? 'Submitting…' : 'Submit request'}</button>
+          </>}>
+          {err && <Alert type="danger">{err}</Alert>}
+          <div style={{ fontSize:11,color:'var(--text-secondary)',marginBottom:10 }}>
+            Vehicle: <strong>{d.plate || '—'}</strong> · Fuel type auto-detected: <strong>{d.fuel_type || 'Petrol'}</strong>
+          </div>
+          <div className="form-grid-2">
+            <FG label="Station" required>
+              <select value={form.station_name||''} onChange={e=>f('station_name',e.target.value)}>
+                <option value="">Select station…</option>
+                {STATIONS.map(s => <option key={s}>{s}</option>)}
+              </select>
+            </FG>
+            <FG label="Quantity (litres)" required><input type="number" value={form.quantity||''} onChange={e=>f('quantity',e.target.value)} placeholder="e.g. 50" /></FG>
+            <FG label="Price per litre (₦)" required><input type="number" value={form.price_per_litre||''} onChange={e=>f('price_per_litre',e.target.value)} placeholder="e.g. 1335" /></FG>
+            <FG label="Destination"><input value={form.destination||''} onChange={e=>f('destination',e.target.value)} placeholder="e.g. Within Lagos" /></FG>
+          </div>
+          {(form.station_name||'').includes('Other') && (
+            <FG label="Station account details (non-partner)"><input value={form.station_account||''} onChange={e=>f('station_account',e.target.value)} placeholder="Account number + bank" /></FG>
+          )}
+          <FG label="Current mileage (km)"><input type="number" value={form.mileage||''} onChange={e=>f('mileage',e.target.value)} placeholder="e.g. 48210" /></FG>
+          <FG label="Tag approvers" required hint="Any one tagged person is enough to approve">
+            <input value={form.tagged_approvers||''} onChange={e=>f('tagged_approvers',e.target.value)} placeholder="e.g. Amaka HR, Kenneth (any one approves)" />
+          </FG>
+          <FG label="Dashboard photo (mileage)" required><input type="file" accept="image/*" /></FG>
+        </Modal>
+      )}
+
+      {/* Dispatch / Accommodation Modal */}
+      {showDispatch && (
+        <Modal title="Dispatch / accommodation request" onClose={() => setShowDispatch(false)}
+          footer={<>
+            <button className="btn" onClick={() => setShowDispatch(false)}>Cancel</button>
+            <button className="btn btn-primary" onClick={submitDispatch} disabled={saving}>{saving ? 'Submitting…' : 'Submit'}</button>
+          </>}>
+          {err && <Alert type="danger">{err}</Alert>}
+          <FG label="Description" required><input value={form.description||''} onChange={e=>f('description',e.target.value)} placeholder="e.g. Dispatch OND-881PQ / Asaba / 13k" /></FG>
+          <div className="form-grid-2">
+            <FG label="Category">
+              <select value={form.category||'DISPATCH/ACCOMMODATION'} onChange={e=>f('category',e.target.value)}>
+                <option value="DISPATCH/ACCOMMODATION">Dispatch / Accommodation</option>
+                <option value="DRIVER ALLOWANCE">Driver allowance</option>
+              </select>
+            </FG>
+            <FG label="Amount (₦)" required><input type="number" value={form.amount_to_pay||''} onChange={e=>f('amount_to_pay',e.target.value)} /></FG>
+          </div>
+          <div style={{ border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',marginBottom:8 }}>
+            <div style={{ fontSize:11,fontWeight:500,color:'var(--text-secondary)',marginBottom:6 }}>Payment account (auto-populated from your profile)</div>
+            <div style={{ fontSize:12 }}>Bank: <strong>{d.bank_name || '—'}</strong> &nbsp; Account: <strong style={{ fontFamily:'var(--mono)' }}>{d.account_number || '—'}</strong></div>
+            <div style={{ marginTop:8 }}>
+              <label style={{ fontSize:11,display:'flex',alignItems:'center',gap:6,cursor:'pointer' }}>
+                <input type="checkbox" checked={useAlt} onChange={e=>setUseAlt(e.target.checked)} />
+                Use different account for this request
+              </label>
+            </div>
+            {useAlt && (
+              <div style={{ marginTop:8 }}>
+                <FG label="Alternative account details"><input value={form.alt_account||''} onChange={e=>f('alt_account',e.target.value)} placeholder="Account number + bank" /></FG>
+              </div>
+            )}
+          </div>
+          <FG label="Tag approvers" required hint="Any one tagged person is enough to approve">
+            <input value={form.tagged_approvers||''} onChange={e=>f('tagged_approvers',e.target.value)} placeholder="e.g. Amaka HR, Kenneth" />
+          </FG>
+        </Modal>
+      )}
+    </div>
+  );
+}
