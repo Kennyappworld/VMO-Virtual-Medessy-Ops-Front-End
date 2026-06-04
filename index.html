@@ -955,6 +955,7 @@ function html(id, content) { const e = el(id); if (e) e.innerHTML = content; }
 // ── ROLE NAVIGATION ──────────────────────────────────────────────────────────
 const ALL_PAGES = [
   { id:'dashboard',    icon:'ti-dashboard',       label:'Home',           section:'Main' },
+  { id:'issues',       icon:'ti-alert-circle',    label:'Issues',         section:'Main' },
   { id:'requests',     icon:'ti-file-dollar',     label:'Payments',       section:'Operations' },
   { id:'fuel',         icon:'ti-gas-station',     label:'Fuel',           section:'Operations' },
   { id:'vehicles',     icon:'ti-truck',           label:'Vehicles',       section:'Fleet' },
@@ -973,6 +974,7 @@ const ALL_PAGES = [
   { id:'chat',         icon:'ti-message-circle',  label:'Chat',           section:'Team' },
   { id:'meetings',     icon:'ti-video',           label:'Meetings',       section:'Team' },
   { id:'users',        icon:'ti-users',           label:'Users',          section:'Admin' },
+  { id:'departments',  icon:'ti-building-community',label:'Departments',  section:'Admin' },
   { id:'audit',        icon:'ti-history',         label:'Audit Log',      section:'Admin' },
   { id:'history',      icon:'ti-table-export',    label:'History & Export',section:'Admin' },
 ];
@@ -981,15 +983,15 @@ const ROLE_PAGES = {
   real_admin:         ALL_PAGES.map(p => p.id),
   super_admin:        ALL_PAGES.map(p => p.id),
   admin:              ALL_PAGES.map(p => p.id),
-  hr:                 ['dashboard','drivers','vehicles','compliance','reservations','chat','meetings'],
-  accounts:           ['dashboard','requests','receivables','imprest','clients','fuel','chat','audit','balance','meetings'],
-  compliance:         ['dashboard','vehicles','drivers','compliance','chat','maintenance'],
-  operations_manager: ['dashboard','requests','fuel','vehicles','drivers','reservations','inventory','compliance','maintenance','chat','companies','trips','availability','meetings'],
-  haulage_manager:    ['dashboard','requests','fuel','vehicles','drivers','compliance','companies','trips','inventory','chat','availability','maintenance','meetings'],
-  pool_manager:       ['dashboard','requests','fuel','vehicles','drivers','reservations','compliance','companies','chat','availability','meetings'],
-  logistics_supervisor:['dashboard','availability','chat'],
-  driver:             ['dashboard','fuel','reservations','chat'],
-  staff:              ['dashboard','requests','fuel','chat'],
+  hr:                 ['dashboard','issues','drivers','vehicles','compliance','reservations','chat','meetings'],
+  accounts:           ['dashboard','issues','requests','receivables','imprest','clients','fuel','chat','audit','balance','meetings'],
+  compliance:         ['dashboard','issues','vehicles','drivers','compliance','chat','maintenance'],
+  operations_manager: ['dashboard','issues','requests','fuel','vehicles','drivers','reservations','inventory','compliance','maintenance','chat','companies','trips','availability','meetings'],
+  haulage_manager:    ['dashboard','issues','requests','fuel','vehicles','drivers','compliance','companies','trips','inventory','chat','availability','maintenance','meetings'],
+  pool_manager:       ['dashboard','issues','requests','fuel','vehicles','drivers','reservations','compliance','companies','chat','availability','meetings'],
+  logistics_supervisor:['dashboard','issues','availability','chat'],
+  driver:             ['dashboard','issues','fuel','reservations','chat'],
+  staff:              ['dashboard','issues','requests','fuel','chat'],
 };
 
 function allowedPages() {
@@ -1196,7 +1198,7 @@ function navigate(p) {
   document.querySelectorAll('[data-btab]').forEach(b => b.classList.toggle('active', b.dataset.btab === p));
   // Update title
   const pg = ALL_PAGES.find(x => x.id === p);
-  const titles = {dashboard:'Dashboard',requests:'Payment Requests',fuel:'Fuel Requests',vehicles:'Vehicles',drivers:'Drivers',clients:'Clients',receivables:'Receivables',imprest:'Imprest Accounts',reservations:'Pool Cars',inventory:'Store',compliance:'Compliance',chat:'Team Chat',users:'Users',audit:'Audit Log',availability:'Fleet Availability',trips:'Trip Log',companies:'Companies & Units',history:'History & Export',maintenance:'Maintenance Tracker',meetings:'Meetings & Calls',balance:'Balance Sheet'};
+  const titles = {dashboard:'Dashboard',issues:'Issues & Complaints',requests:'Payment Requests',fuel:'Fuel Requests',vehicles:'Vehicles',drivers:'Drivers',clients:'Clients',receivables:'Receivables',imprest:'Imprest Accounts',reservations:'Pool Cars',inventory:'Store',compliance:'Compliance',chat:'Team Chat',users:'Users',departments:'Departments',audit:'Audit Log',availability:'Fleet Availability',trips:'Trip Log',companies:'Companies & Units',history:'History & Export',maintenance:'Maintenance Tracker',meetings:'Meetings & Calls',balance:'Balance Sheet'};
   html('page-title', titles[p] || p);
   html('topbar-btn', '');
   // Only show spinner if page isn't cached
@@ -1245,6 +1247,8 @@ async function loadPage(p) {
     else if (p==='availability') await pgAvailability();
     else if (p==='maintenance') await pgMaintenance();
     else if (p==='meetings') await pgMeetings();
+    else if (p==='issues') await pgIssues();
+    else if (p==='departments') await pgDepartments();
     else if (p==='balance') await pgBalanceSheet();
   } catch(e) {
     const offline = e.message.includes('fetch') || e.message.includes('network') || e.message.includes('Failed') || e.message.includes('NetworkError');
@@ -5819,6 +5823,820 @@ function downloadMtgPDF(id){
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([txt],{type:'text/plain'}));a.download=`VMO_Meeting_${(m.title||'Meeting').replace(/\s+/g,'_')}.txt`;a.click();
 }
 
+
+// ── ISSUES & COMPLAINTS ───────────────────────────────────────────────────────
+const ISSUE_CATEGORIES = ['general','maintenance','fuel','fleet','compliance','finance','hr','it','safety','other'];
+const ISSUE_PRIORITIES = ['low','normal','high','critical'];
+const PRIORITY_COLORS = {low:'var(--t3)',normal:'var(--sapphire)',high:'var(--amber)',critical:'var(--crimson)'};
+const STATUS_COLORS = {open:'var(--amber)',resolved:'var(--emerald)',closed:'var(--t3)'};
+
+async function pgIssues() {
+  const isAdmin = ['real_admin','super_admin','admin','operations_manager'].includes(user.role);
+  html('topbar-btn', `
+    <div style="display:flex;gap:6px">
+      ${isAdmin ? `<button class="btn btn-ghost btn-sm" onclick="showIssueKPIs()" style="font-size:11px"><i class="ti ti-chart-bar"></i> KPIs</button>` : ''}
+      <button class="topbar-action" onclick="showNewIssue()"><i class="ti ti-plus"></i></button>
+    </div>`);
+
+  const [issues, kpi] = await Promise.all([
+    api('GET', '/api/issues').catch(() => []),
+    api('GET', '/api/kpi/dashboard').catch(() => ({})),
+  ]);
+
+  const open = issues.filter(i => i.status === 'open');
+  const resolved = issues.filter(i => i.status === 'resolved');
+  const myOpen = issues.filter(i => i.raised_by === user.id && i.status === 'open');
+  const unread = issues.filter(i => !i.is_read);
+
+  html('page-content', `
+    <!-- KPI Strip -->
+    <div class="stat-grid" style="margin-bottom:16px">
+      <div class="stat-card stat-amber">
+        <div class="stat-label">Open Issues</div>
+        <div class="stat-value">${open.length}</div>
+        <div class="stat-sub">Needs attention</div>
+      </div>
+      <div class="stat-card stat-green">
+        <div class="stat-label">Resolved (30d)</div>
+        <div class="stat-value">${resolved.length}</div>
+        <div class="stat-sub">${kpi.issues?.resolution_rate||100}% rate</div>
+      </div>
+      <div class="stat-card stat-blue">
+        <div class="stat-label">My Raised</div>
+        <div class="stat-value">${myOpen.length}</div>
+        <div class="stat-sub">Open by me</div>
+      </div>
+      <div class="stat-card stat-red">
+        <div class="stat-label">Unread</div>
+        <div class="stat-value">${unread.length}</div>
+        <div class="stat-sub">New for you</div>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div style="display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;padding-bottom:4px;flex-wrap:wrap">
+      ${['all','open','resolved'].map(s => `
+        <button class="group-chip ${s==='all'?'active':''}" onclick="filterIssues('${s}')" data-ifilter="${s}">
+          ${s.charAt(0).toUpperCase()+s.slice(1)} ${s==='open'?`(${open.length})`:''}
+        </button>`).join('')}
+      <div style="flex:1;min-width:140px;display:flex;align-items:center;gap:6px;background:var(--ink3);border:1px solid var(--b2);border-radius:22px;padding:6px 12px">
+        <i class="ti ti-search" style="color:var(--t3);font-size:13px"></i>
+        <input id="issue-search" placeholder="Search issues…" oninput="filterIssues()" style="background:none;border:none;outline:none;color:var(--t1);font-size:12px;width:100%">
+      </div>
+    </div>
+
+    <!-- Issues List -->
+    <div id="issues-list">
+      ${issues.length ? issues.map(iss => renderIssueCard(iss)).join('') :
+        '<div class="empty-state"><div class="empty-icon"><i class="ti ti-alert-circle"></i></div><div class="empty-title">No issues yet</div><div class="empty-sub">Raise an issue using the + button</div></div>'}
+    </div>
+  `);
+  window._issueData = issues;
+}
+
+function renderIssueCard(iss) {
+  const isUnread = !iss.is_read;
+  const pc = PRIORITY_COLORS[iss.priority] || 'var(--t3)';
+  const sc = STATUS_COLORS[iss.status] || 'var(--t3)';
+  const isMe = iss.raised_by === user.id;
+  return `
+  <div class="list-item issue-row" data-istatus="${iss.status}" data-ititle="${sanitise(iss.title).toLowerCase()}"
+    style="border-left:3px solid ${sc};cursor:pointer;${isUnread?'background:rgba(201,168,76,.04)':''}"
+    onclick="openIssue(${iss.id})">
+    <div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0">
+      <div style="width:10px;height:10px;border-radius:50%;background:${sc}"></div>
+      ${isUnread ? '<div style="width:6px;height:6px;border-radius:50%;background:var(--gold);margin-top:4px;box-shadow:0 0 6px var(--gold)"></div>' : ''}
+    </div>
+    <div class="list-body">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">
+        <strong style="font-size:13px;color:var(--t1)">${sanitise(iss.title)}</strong>
+        <span class="badge badge-gold" style="font-size:9px">${sanitise(iss.category||'general').toUpperCase()}</span>
+        <span style="font-size:10px;font-weight:700;color:${pc}">${(iss.priority||'normal').toUpperCase()}</span>
+      </div>
+      <div style="font-size:11.5px;color:var(--t3)">
+        <i class="ti ti-user" style="font-size:11px"></i> ${sanitise(iss.raised_by_name||'—')}
+        ${iss.raised_by_dept?`· ${sanitise(iss.raised_by_dept)}`:''}
+        · ${fmtDate(iss.created_at)} ${fmtTime(iss.created_at)}
+      </div>
+      ${iss.status==='resolved' ? `<div style="font-size:11px;color:var(--emerald);margin-top:2px"><i class="ti ti-check"></i> Resolved ${fmtDate(iss.resolved_at)} by ${sanitise(iss.resolved_by_name||'—')}</div>` : ''}
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
+      <span class="badge badge-${iss.status==='resolved'?'approved':'pending'}">${iss.status}</span>
+      <div style="display:flex;gap:6px;font-size:10px;color:var(--t3)">
+        ${iss.comment_count>0?`<span><i class="ti ti-message-circle" style="font-size:11px"></i> ${iss.comment_count}</span>`:''}
+        <span title="Delivered to ${iss.read_count} people">
+          ${iss.read_count>0?'<i class="ti ti-checks" style="color:var(--gold)"></i>':'<i class="ti ti-check" style="color:var(--t4)"></i>'}
+          ${iss.read_count||0}
+        </span>
+      </div>
+      ${isMe?'<span style="font-size:9px;color:var(--t4)">raised by me</span>':''}
+    </div>
+  </div>`;
+}
+
+function filterIssues(status) {
+  if (status) {
+    document.querySelectorAll('[data-ifilter]').forEach(b => b.classList.toggle('active', b.dataset.ifilter===status));
+    window._issueFilter = status;
+  }
+  const s = window._issueFilter || 'all';
+  const q = (document.getElementById('issue-search')?.value||'').toLowerCase();
+  document.querySelectorAll('.issue-row').forEach(row => {
+    const matchStatus = s==='all' || row.dataset.istatus===s;
+    const matchSearch = !q || (row.dataset.ititle||'').includes(q);
+    row.style.display = matchStatus && matchSearch ? '' : 'none';
+  });
+}
+
+async function openIssue(id) {
+  showModal('Loading…', '<div class="loading-state" style="padding:30px"><div class="spinner"></div></div>');
+  try {
+    const iss = await api('GET', `/api/issues/${id}`);
+    // Mark read
+    api('POST', `/api/issues/${id}/read`).catch(() => {});
+    const canResolve = ['real_admin','super_admin','admin','operations_manager'].includes(user.role) || iss.raised_by === user.id;
+    const modal = document.querySelector('.modal');
+    if (!modal) return;
+    modal.innerHTML = `
+      <div class="modal-handle"></div>
+      <div class="modal-title">
+        <span style="font-family:'Fraunces',serif">${sanitise(iss.title)}</span>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+
+      <!-- Status badges -->
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+        <span class="badge badge-${iss.status==='resolved'?'approved':'pending'}">${iss.status}</span>
+        <span class="badge badge-gold" style="font-size:9px">${sanitise(iss.category||'general').toUpperCase()}</span>
+        <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;background:rgba(0,0,0,.2);color:${PRIORITY_COLORS[iss.priority]||'var(--t3)'}">${(iss.priority||'normal').toUpperCase()}</span>
+        <span class="badge badge-ghost" style="font-size:9px">${sanitise(iss.ref_number||'')}</span>
+      </div>
+
+      <!-- Meta -->
+      <div style="background:var(--ink3);border-radius:var(--r-md);padding:12px;margin-bottom:12px;font-size:12.5px">
+        <div style="margin-bottom:4px"><strong style="color:var(--t3)">Raised by:</strong> ${sanitise(iss.raised_by_name||'—')} · ${sanitise(iss.raised_by_dept||'—')} · ${fmtDate(iss.created_at)}</div>
+        ${iss.description?`<div style="color:var(--t2);margin-top:6px">${sanitise(iss.description)}</div>`:''}
+        ${iss.status==='resolved'?`<div style="color:var(--emerald);margin-top:6px"><i class="ti ti-check"></i> Resolved by ${sanitise(iss.resolved_by_name||'—')} on ${fmtDate(iss.resolved_at)}${iss.resolution_notes?': '+sanitise(iss.resolution_notes):''}</div>`:''}
+      </div>
+
+      <!-- Tags -->
+      ${(iss.tags||[]).length ? `
+      <div style="margin-bottom:12px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--t3);margin-bottom:6px;font-family:'DM Mono',monospace">Tagged</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${iss.tags.map(t => `<span class="badge badge-gold" style="font-size:10px">${sanitise(t.user_name||t.dept_name||'—')}</span>`).join('')}
+        </div>
+      </div>` : ''}
+
+      <!-- Read receipts -->
+      <div style="margin-bottom:12px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--t3);margin-bottom:6px;font-family:'DM Mono',monospace">
+          Seen by ${(iss.reads||[]).length} people
+        </div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">
+          ${(iss.reads||[]).slice(0,8).map(r => `
+            <div title="${sanitise(r.user_name||'—')} · ${fmtTime(r.read_at)}" style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--gold),#8B5E1A);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:var(--ink)" >${avatar(r.user_name||'?')}</div>`).join('')}
+          ${(iss.reads||[]).length > 8 ? `<div style="font-size:10px;color:var(--t3);padding:8px">+${iss.reads.length-8} more</div>` : ''}
+        </div>
+      </div>
+
+      <!-- Comments -->
+      <div style="margin-bottom:12px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--t3);margin-bottom:8px;font-family:'DM Mono',monospace">
+          Comments (${(iss.comments||[]).length})
+        </div>
+        <div style="max-height:160px;overflow-y:auto">
+          ${(iss.comments||[]).map(c => `
+            <div style="display:flex;gap:8px;margin-bottom:8px">
+              <div style="width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#fff;flex-shrink:0">${avatar(c.user_name||'?')}</div>
+              <div style="flex:1;background:var(--ink3);border-radius:var(--r-sm);padding:8px 10px">
+                <div style="font-size:10px;color:var(--t3);margin-bottom:3px">${sanitise(c.user_name||'—')} · ${fmtTime(c.created_at)}</div>
+                <div style="font-size:12.5px;color:var(--t1)">${sanitise(c.comment)}</div>
+              </div>
+            </div>`).join('') || '<div style="font-size:12px;color:var(--t4)">No comments yet</div>'}
+        </div>
+        <!-- Add comment -->
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input class="form-input" id="issue-comment-input" placeholder="Add a comment…" style="flex:1;height:38px" onkeydown="if(event.key==='Enter')submitIssueComment(${id})">
+          <button class="btn btn-primary btn-sm" onclick="submitIssueComment(${id})"><i class="ti ti-send"></i></button>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${iss.status==='open' && canResolve ? `
+          <button class="btn btn-primary btn-sm" onclick="resolveIssue(${id})" style="flex:1">
+            <i class="ti ti-check"></i> Mark Resolved
+          </button>` : ''}
+        ${iss.status==='resolved' && ['real_admin','super_admin','admin'].includes(user.role) ? `
+          <button class="btn btn-ghost btn-sm" onclick="reopenIssue(${id})">
+            <i class="ti ti-refresh"></i> Reopen
+          </button>` : ''}
+        <button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button>
+      </div>`;
+  } catch(e) {
+    const m = document.querySelector('.modal');
+    if (m) m.innerHTML += `<div class="alert alert-danger">${sanitise(e.message)}</div>`;
+  }
+}
+
+async function submitIssueComment(id) {
+  const inp = document.getElementById('issue-comment-input');
+  const comment = inp?.value?.trim();
+  if (!comment) return;
+  inp.value = '';
+  try {
+    await api('POST', `/api/issues/${id}/comments`, { comment });
+    await openIssue(id);
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function resolveIssue(id) {
+  const notes = prompt('Resolution notes (optional):') || '';
+  try {
+    await api('PATCH', `/api/issues/${id}/resolve`, { resolution_notes: notes });
+    closeModal();
+    showToast('✅ Issue marked resolved', 'success');
+    navigate('issues');
+  } catch(e) { alert(e.message); }
+}
+
+async function reopenIssue(id) {
+  try {
+    await api('PATCH', `/api/issues/${id}/reopen`);
+    closeModal();
+    showToast('Issue reopened', 'success');
+    navigate('issues');
+  } catch(e) { alert(e.message); }
+}
+
+function showNewIssue() {
+  const users = window._chatUsers || [];
+  const depts = [...new Set(users.map(u => u.department).filter(Boolean))];
+  showModal('Raise an Issue / Complaint', `
+    <div class="form-group">
+      <label class="form-label">Title / Summary</label>
+      <input class="form-input" id="ni-title" placeholder="e.g. Tracker not working on GGE 546">
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Category</label>
+        <select class="form-input" id="ni-cat">
+          ${ISSUE_CATEGORIES.map(c=>`<option value="${c}">${c.charAt(0).toUpperCase()+c.slice(1)}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Priority</label>
+        <select class="form-input" id="ni-pri">
+          ${ISSUE_PRIORITIES.map(p=>`<option value="${p}">${p.charAt(0).toUpperCase()+p.slice(1)}</option>`).join('')}
+        </select></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Description</label>
+      <textarea class="form-input" id="ni-desc" rows="3" placeholder="Describe the issue in detail…"></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Tag Departments <span style="color:var(--t3)">(all members will see this)</span></label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;padding:8px;background:var(--ink3);border-radius:var(--r-sm);border:1px solid var(--b2)">
+        ${depts.map(d=>`<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;padding:4px 8px;background:var(--ink2);border-radius:6px">
+          <input type="checkbox" value="${sanitise(d)}" class="issue-dept-tag" style="width:14px;height:14px"> ${sanitise(d)}
+        </label>`).join('') || '<span style="font-size:12px;color:var(--t4)">No departments loaded</span>'}
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Tag Specific People <span style="color:var(--t3)">(optional)</span></label>
+      <div style="max-height:140px;overflow-y:auto;padding:6px;background:var(--ink3);border-radius:var(--r-sm);border:1px solid var(--b2)">
+        ${users.filter(u=>u.id!==user.id).map(u=>`
+          <label style="display:flex;align-items:center;gap:8px;padding:5px;cursor:pointer;border-radius:6px" onmouseover="this.style.background='var(--ink2)'" onmouseout="this.style.background=''">
+            <input type="checkbox" value="${u.id}" data-name="${sanitise(u.name||u.full_name||'')}" class="issue-user-tag" style="width:14px;height:14px">
+            <div style="width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,var(--gold),#8B5E1A);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:var(--ink)">${avatar(u.name||'?')}</div>
+            <div><div style="font-size:12px;font-weight:600">${sanitise(u.name||u.full_name||'')}</div><div style="font-size:10px;color:var(--t3)">${sanitise(u.department||'')} · ${sanitise(u.role||'')}</div></div>
+          </label>`).join('')}
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-block" onclick="submitNewIssue()"><i class="ti ti-alert-circle"></i> Raise Issue</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>`);
+
+  // Load users if not already loaded
+  if (!window._chatUsers?.length) {
+    api('GET', '/api/users').then(u => { window._chatUsers = u; }).catch(() => {});
+  }
+}
+
+async function submitNewIssue() {
+  const title = document.getElementById('ni-title')?.value?.trim();
+  if (!title) { alert('Title required'); return; }
+  const taggedDepts = [...document.querySelectorAll('.issue-dept-tag:checked')].map(c => c.value);
+  const taggedUsers = [...document.querySelectorAll('.issue-user-tag:checked')].map(c => ({ id: parseInt(c.value), name: c.dataset.name }));
+  try {
+    await api('POST', '/api/issues', {
+      title,
+      description: document.getElementById('ni-desc')?.value?.trim() || null,
+      category: document.getElementById('ni-cat')?.value || 'general',
+      priority: document.getElementById('ni-pri')?.value || 'normal',
+      tagged_depts: taggedDepts,
+      tagged_users: taggedUsers,
+    });
+    closeModal();
+    showToast('Issue raised successfully', 'success');
+    navigate('issues');
+  } catch(e) { alert(e.message); }
+}
+
+async function showIssueKPIs() {
+  const kpi = await api('GET', '/api/kpi/dashboard').catch(() => ({}));
+  const iss = kpi.issues || {};
+  showModal('Issues KPI Dashboard', `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+      ${[
+        ['Resolution Rate', (iss.resolution_rate||100)+'%', 'stat-green'],
+        ['Avg Resolution', (iss.avg_resolution_hours||0)+'h', 'stat-blue'],
+        ['Open Issues', iss.open||0, 'stat-amber'],
+        ['High Priority', iss.high_priority||0, 'stat-red'],
+      ].map(([label,val,cls])=>`<div class="stat-card ${cls}"><div class="stat-label">${label}</div><div class="stat-value" style="font-size:22px">${val}</div></div>`).join('')}
+    </div>
+    ${iss.by_dept?.length ? `
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--t3);margin-bottom:8px;font-family:'DM Mono',monospace">Issues by Department (30 days)</div>
+    ${iss.by_dept.map(d => {
+      const pct = d.cnt > 0 ? Math.round(d.resolved/d.cnt*100) : 0;
+      return `<div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+          <span style="color:var(--t2);font-weight:600">${sanitise(d.dept)}</span>
+          <span style="color:var(--t3)">${d.resolved}/${d.cnt} resolved · ${pct}%</span>
+        </div>
+        <div style="height:5px;background:var(--ink3);border-radius:3px;overflow:hidden">
+          <div style="height:5px;width:${pct}%;background:${pct>=80?'var(--emerald)':pct>=50?'var(--amber)':'var(--crimson)'};border-radius:3px;transition:.4s"></div>
+        </div>
+      </div>`;
+    }).join('')}` : ''}
+    <button class="btn btn-ghost btn-block" style="margin-top:8px" onclick="closeModal()">Close</button>`);
+}
+
+// ── DEPARTMENTS ────────────────────────────────────────────────────────────────
+async function pgDepartments() {
+  const isAdmin = ['real_admin','super_admin','admin'].includes(user.role);
+  html('topbar-btn', isAdmin ? `<button class="topbar-action" onclick="showNewDepartment()"><i class="ti ti-plus"></i></button>` : '');
+  const depts = await api('GET', '/api/departments').catch(() => []);
+  html('page-content', `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">
+      ${depts.map(d => `
+        <div style="background:var(--ink2);border:1px solid var(--b2);border-radius:var(--r-md);padding:16px;border-top:3px solid ${sanitise(d.color||'#c9a84c')};transition:.2s;cursor:pointer" onclick="filterUsersByDept('${sanitise(d.name)}')" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform=''">
+          <div style="font-size:14px;font-weight:700;color:var(--t1);margin-bottom:4px">${sanitise(d.name)}</div>
+          <div style="font-size:11px;color:var(--t3);margin-bottom:10px">${sanitise(d.description||'')}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:20px;font-weight:900;color:${sanitise(d.color||'#c9a84c')};font-family:'Fraunces',serif">${d.member_count||0}</span>
+            <span style="font-size:10px;color:var(--t3)">members</span>
+          </div>
+          ${isAdmin ? `
+          <div style="display:flex;gap:5px;margin-top:10px">
+            <button class="btn btn-ghost btn-sm" style="flex:1;font-size:10px" onclick="event.stopPropagation();editDepartment(${d.id},'${sanitise(d.name)}','${sanitise(d.description||'')}','${sanitise(d.color||'#c9a84c')}')"><i class="ti ti-edit"></i> Edit</button>
+            <button class="btn btn-danger btn-sm" style="font-size:10px;padding:5px 8px" onclick="event.stopPropagation();deleteDept(${d.id},'${sanitise(d.name)}')"><i class="ti ti-trash"></i></button>
+          </div>` : ''}
+        </div>`).join('') || '<div class="empty-state"><div class="empty-icon"><i class="ti ti-building-community"></i></div><div class="empty-title">No departments</div></div>'}
+    </div>`);
+}
+
+function showNewDepartment() {
+  showModal('Create Department', `
+    <div class="form-group"><label class="form-label">Department Name</label>
+      <input class="form-input" id="nd-name" placeholder="e.g. Workshop"></div>
+    <div class="form-group"><label class="form-label">Description</label>
+      <input class="form-input" id="nd-desc" placeholder="What this department does"></div>
+    <div class="form-group"><label class="form-label">Colour</label>
+      <input type="color" id="nd-color" value="#c9a84c" style="width:100%;height:42px;border:1px solid var(--b2);border-radius:var(--r-sm);background:var(--ink3);cursor:pointer"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-block" onclick="submitDept()">Create</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+async function submitDept() {
+  const name = document.getElementById('nd-name')?.value?.trim();
+  if (!name) { alert('Name required'); return; }
+  try {
+    await api('POST', '/api/departments', { name, description: document.getElementById('nd-desc')?.value, color: document.getElementById('nd-color')?.value });
+    closeModal(); navigate('departments');
+  } catch(e) { alert(e.message); }
+}
+
+function editDepartment(id, name, desc, color) {
+  showModal('Edit Department', `
+    <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="ed-name" value="${sanitise(name)}"></div>
+    <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="ed-desc" value="${sanitise(desc)}"></div>
+    <div class="form-group"><label class="form-label">Colour</label><input type="color" id="ed-color" value="${sanitise(color)}" style="width:100%;height:42px;border:1px solid var(--b2);border-radius:var(--r-sm);background:var(--ink3);cursor:pointer"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-block" onclick="updateDept(${id})">Save</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+async function updateDept(id) {
+  try {
+    await api('PUT', `/api/departments/${id}`, { name: document.getElementById('ed-name')?.value, description: document.getElementById('ed-desc')?.value, color: document.getElementById('ed-color')?.value });
+    closeModal(); navigate('departments');
+  } catch(e) { alert(e.message); }
+}
+async function deleteDept(id, name) {
+  if (!confirm(`Delete department "${name}"? Members will not be deleted.`)) return;
+  try { await api('DELETE', `/api/departments/${id}`); navigate('departments'); } catch(e) { alert(e.message); }
+}
+function filterUsersByDept(dept) { navigate('users'); }
+
+// ── ENHANCED USERS PAGE ────────────────────────────────────────────────────────
+async function pgUsers() {
+  const isAdmin = ['real_admin','super_admin','admin'].includes(user.role);
+  const seedBtn = user.role === 'super_admin' ? `<button class="btn btn-ghost btn-sm" onclick="runSeed()" style="margin-right:6px;font-size:11px"><i class="ti ti-database"></i> Seed</button>` : '';
+
+  html('topbar-btn', `
+    <div style="display:flex;gap:6px">
+      ${seedBtn}
+      ${isAdmin ? `<button class="btn btn-ghost btn-sm" onclick="showSignupRequests()" style="font-size:11px"><i class="ti ti-user-check"></i> Signups</button>` : ''}
+      <button class="topbar-action" onclick="showNewUser()"><i class="ti ti-plus"></i></button>
+    </div>`);
+
+  const [data, depts] = await Promise.all([
+    api('GET', '/api/users'),
+    api('GET', '/api/departments').catch(() => []),
+  ]);
+  window._deptList = depts;
+
+  // Count pending signups for badge
+  let pendingCount = 0;
+  if (isAdmin) {
+    const pending = await api('GET', '/api/signup-requests').catch(() => []);
+    pendingCount = pending.filter(r => r.status === 'pending').length;
+    window._signupRequests = pending;
+  }
+
+  // Group by department
+  const byDept = {};
+  data.forEach(u => {
+    const d = u.department || 'Unassigned';
+    if (!byDept[d]) byDept[d] = [];
+    byDept[d].push(u);
+  });
+
+  html('page-content', `
+    ${pendingCount > 0 ? `
+    <div style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.2);border-radius:var(--r-md);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between">
+      <div style="font-size:13px;font-weight:600;color:var(--gold)"><i class="ti ti-user-plus"></i> ${pendingCount} pending signup request${pendingCount>1?'s':''}</div>
+      <button class="btn btn-primary btn-sm" onclick="showSignupRequests()">Review</button>
+    </div>` : ''}
+
+    <!-- Share signup link -->
+    ${isAdmin ? `
+    <div style="background:var(--ink2);border:1px solid var(--b2);border-radius:var(--r-md);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-size:12px;font-weight:700;color:var(--t1)">Signup Link</div>
+        <div style="font-size:11px;color:var(--t3)">Share this link with new users to request access</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="copySignupLink()"><i class="ti ti-link"></i> Copy Link</button>
+    </div>` : ''}
+
+    <!-- Users grouped by dept -->
+    ${Object.entries(byDept).map(([dept, members]) => `
+      <div style="margin-bottom:16px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--t3);margin-bottom:8px;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:6px">
+          <i class="ti ti-building-community" style="font-size:12px"></i> ${sanitise(dept)} (${members.length})
+        </div>
+        ${members.map(u => `
+          <div class="list-item" style="margin-bottom:6px">
+            <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--gold),#8B5E1A);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:var(--ink);flex-shrink:0">
+              ${avatar(u.name||u.full_name||'?')}
+            </div>
+            <div class="list-body">
+              <div class="list-title">${sanitise(u.name||u.full_name||'')}</div>
+              <div class="list-sub">${sanitise(u.email||'')}</div>
+              <div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">
+                <span class="badge badge-${u.active?'approved':'declined'}">${(u.role||'').replace(/_/g,' ')}</span>
+                ${!u.active?'<span class="badge badge-declined">Inactive</span>':''}
+              </div>
+            </div>
+            ${isAdmin ? `
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 8px" onclick="showEditUser(${u.id},'${sanitise(u.name||u.full_name||'')}','${sanitise(u.role||'')}','${sanitise(u.department||'')}','${sanitise(u.depot||'')}')">
+                <i class="ti ti-edit"></i>
+              </button>
+              <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 8px" onclick="resetUserPassword(${u.id},'${sanitise(u.name||u.full_name||'')}')">
+                <i class="ti ti-key"></i>
+              </button>
+            </div>` : ''}
+          </div>`).join('')}
+      </div>`).join('')}
+  `);
+}
+
+function copySignupLink() {
+  const link = window.location.origin + window.location.pathname + '#signup';
+  navigator.clipboard?.writeText(link).then(() => showToast('Signup link copied!', 'success')).catch(() => {
+    prompt('Copy this signup link:', link);
+  });
+}
+
+async function showSignupRequests() {
+  const requests = window._signupRequests || await api('GET', '/api/signup-requests').catch(() => []);
+  const depts = window._deptList || [];
+  const pending = requests.filter(r => r.status === 'pending');
+  const reviewed = requests.filter(r => r.status !== 'pending');
+
+  showModal(`Signup Requests (${pending.length} pending)`, `
+    ${pending.length ? `
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--t3);margin-bottom:10px;font-family:'DM Mono',monospace">Pending Approval</div>
+    ${pending.map(r => `
+      <div class="list-item" style="margin-bottom:8px;border-left:3px solid var(--amber)">
+        <div class="list-dot amber"><i class="ti ti-user-plus"></i></div>
+        <div class="list-body">
+          <div class="list-title">${sanitise(r.full_name)}</div>
+          <div class="list-sub">${sanitise(r.email)} ${r.phone?'· '+sanitise(r.phone):''}</div>
+          <div class="list-sub">${sanitise(r.department||'No dept')} · ${sanitise(r.role_requested||'staff')} · ${fmtDate(r.created_at)}</div>
+          ${r.message?`<div style="font-size:11px;color:var(--t3);margin-top:3px;font-style:italic">"${sanitise(r.message)}"</div>`:''}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <button class="btn btn-primary btn-sm" style="font-size:10px" onclick="approveSignup(${r.id},'${sanitise(r.full_name)}','${sanitise(r.role_requested||'staff')}','${sanitise(r.department||'')}')">
+            <i class="ti ti-check"></i> Approve
+          </button>
+          <button class="btn btn-danger btn-sm" style="font-size:10px" onclick="rejectSignup(${r.id})">
+            <i class="ti ti-x"></i> Reject
+          </button>
+        </div>
+      </div>`).join('')}` : '<div style="text-align:center;padding:20px;color:var(--t3)">No pending requests</div>'}
+
+    ${reviewed.length ? `
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--t3);margin:14px 0 8px;font-family:'DM Mono',monospace">Recently Reviewed</div>
+    ${reviewed.slice(0,5).map(r => `
+      <div class="list-item" style="margin-bottom:4px;opacity:.7">
+        <div class="list-dot ${r.status==='approved'?'green':'red'}"><i class="ti ti-${r.status==='approved'?'check':'x'}"></i></div>
+        <div class="list-body">
+          <div class="list-title" style="font-size:12px">${sanitise(r.full_name)}</div>
+          <div class="list-sub">${sanitise(r.email)} · ${sanitise(r.status)}</div>
+        </div>
+      </div>`).join('')}` : ''}
+    <button class="btn btn-ghost btn-block" style="margin-top:8px" onclick="closeModal()">Close</button>`);
+}
+
+async function approveSignup(id, name, roleReq, deptReq) {
+  const depts = (window._deptList||[]).map(d => d.name);
+  const roleOptions = ['staff','hr','accounts','compliance','driver','operations_manager','haulage_manager','pool_manager','admin'];
+  showModal(`Approve — ${name}`, `
+    <div style="background:rgba(15,165,114,.06);border:1px solid rgba(15,165,114,.15);border-radius:var(--r-sm);padding:10px;margin-bottom:12px;font-size:12px;color:var(--t2)">
+      A temporary password will be generated and shown to you. Share it securely with the user.
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Role</label>
+        <select class="form-input" id="as-role">
+          ${roleOptions.map(r=>`<option value="${r}" ${r===roleReq?'selected':''}>${r.replace(/_/g,' ')}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Department</label>
+        <select class="form-input" id="as-dept">
+          ${depts.map(d=>`<option value="${d}" ${d===deptReq?'selected':''}>${sanitise(d)}</option>`).join('')}
+          <option value="${sanitise(deptReq)}" ${!depts.includes(deptReq)?'selected':''}>Other: ${sanitise(deptReq)}</option>
+        </select></div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-block" onclick="confirmApproveSignup(${id})"><i class="ti ti-check"></i> Approve & Create Account</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+async function confirmApproveSignup(id) {
+  try {
+    const result = await api('PATCH', `/api/signup-requests/${id}/approve`, {
+      role: document.getElementById('as-role')?.value,
+      department: document.getElementById('as-dept')?.value,
+    });
+    closeModal();
+    showModal('✅ Account Created', `
+      <div style="background:var(--ink3);border-radius:var(--r-md);padding:16px;margin-bottom:14px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:8px">Temporary Password</div>
+        <div style="font-family:'DM Mono',monospace;font-size:18px;color:var(--gold);letter-spacing:2px">${sanitise(result.temp_password||'')}</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:6px">Share this securely. User should change it on first login.</div>
+      </div>
+      <button class="btn btn-primary btn-block" onclick="navigator.clipboard?.writeText('${sanitise(result.temp_password||'')}');showToast('Copied!','success')">
+        <i class="ti ti-copy"></i> Copy Password
+      </button>
+      <button class="btn btn-ghost btn-block" style="margin-top:6px" onclick="closeModal();navigate('users')">Done</button>`);
+  } catch(e) { alert(e.message); }
+}
+
+async function rejectSignup(id) {
+  const reason = prompt('Reason for rejection (optional):') || '';
+  try {
+    await api('PATCH', `/api/signup-requests/${id}/reject`, { reason });
+    showToast('Signup request rejected', 'error');
+    navigate('users');
+  } catch(e) { alert(e.message); }
+}
+
+function showEditUser(id, name, role, dept, depot) {
+  const depts = (window._deptList||[]).map(d => d.name);
+  const roles = ['staff','hr','accounts','compliance','driver','operations_manager','haulage_manager','pool_manager','admin','super_admin'];
+  showModal(`Edit — ${name}`, `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Role</label>
+        <select class="form-input" id="eu-role">
+          ${roles.map(r=>`<option value="${r}" ${r===role?'selected':''}>${r.replace(/_/g,' ')}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Department</label>
+        <select class="form-input" id="eu-dept">
+          ${depts.map(d=>`<option value="${d}" ${d===dept?'selected':''}>${sanitise(d)}</option>`).join('')}
+          ${!depts.includes(dept)?`<option value="${sanitise(dept)}" selected>${sanitise(dept)}</option>`:''}
+        </select></div>
+    </div>
+    <div class="form-group"><label class="form-label">Depot</label>
+      <select class="form-input" id="eu-depot">
+        <option value="Lagos" ${depot==='Lagos'?'selected':''}>Lagos</option>
+        <option value="Benin" ${depot==='Benin'?'selected':''}>Benin</option>
+        <option value="Onitsha" ${depot==='Onitsha'?'selected':''}>Onitsha</option>
+        <option value="Abuja" ${depot==='Abuja'?'selected':''}>Abuja</option>
+        <option value="Kano" ${depot==='Kano'?'selected':''}>Kano</option>
+        <option value="PHC" ${depot==='PHC'?'selected':''}>PHC</option>
+      </select></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-block" onclick="submitEditUser(${id})"><i class="ti ti-check"></i> Save Changes</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+async function submitEditUser(id) {
+  try {
+    await api('PATCH', `/api/users/${id}/reassign`, {
+      role: document.getElementById('eu-role')?.value,
+      department: document.getElementById('eu-dept')?.value,
+      depot: document.getElementById('eu-depot')?.value,
+    });
+    closeModal();
+    showToast('User updated', 'success');
+    navigate('users');
+  } catch(e) { alert(e.message); }
+}
+
+async function resetUserPassword(id, name) {
+  if (!confirm(`Reset password for ${name}?`)) return;
+  const newPass = prompt('Enter new password (min 8 chars):');
+  if (!newPass || newPass.length < 8) { alert('Password too short'); return; }
+  try {
+    await api('PATCH', `/api/users/${id}/password`, { password: newPass });
+    showToast('Password updated', 'success');
+  } catch(e) { alert(e.message); }
+}
+
+// ── SIGNUP PAGE (rendered when URL hash is #signup) ──────────────────────────
+function renderSignupPage() {
+  document.getElementById('root').innerHTML = `
+  <div class="login-wrap">
+    <div class="login-orb login-orb-1"></div>
+    <div class="login-orb login-orb-2"></div>
+    <div class="login-card" style="max-width:480px">
+      <div style="display:flex;flex-direction:column;align-items:center;margin-bottom:24px">
+        <div class="login-logo" style="font-size:44px">VMO</div>
+        <div class="login-divider"></div>
+        <div class="login-sub">Request Access · Virtual Ops Platform</div>
+      </div>
+      <div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.15);border-radius:var(--r-sm);padding:10px 12px;font-size:12px;color:var(--t2);margin-bottom:16px">
+        <i class="ti ti-info-circle" style="color:var(--gold)"></i> Fill in your details. A Super Admin will review and approve your access. You will receive a temporary password once approved.
+      </div>
+      <div id="signup-form">
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Full Name *</label><input class="form-input" id="su-name" placeholder="Your full name"></div>
+          <div class="form-group"><label class="form-label">Email *</label><input class="form-input" type="email" id="su-email" placeholder="you@medessy.com"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="su-phone" placeholder="0801234567" type="tel"></div>
+          <div class="form-group"><label class="form-label">Department</label><input class="form-input" id="su-dept" placeholder="e.g. Operations"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Role Requested</label>
+            <select class="form-input" id="su-role">
+              <option value="staff">Staff</option>
+              <option value="driver">Driver</option>
+              <option value="hr">HR</option>
+              <option value="accounts">Accounts</option>
+              <option value="compliance">Compliance</option>
+              <option value="operations_manager">Operations Manager</option>
+              <option value="haulage_manager">Haulage Manager</option>
+            </select></div>
+          <div class="form-group"><label class="form-label">Location / Depot</label>
+            <select class="form-input" id="su-depot">
+              <option>Lagos</option><option>Benin</option><option>Onitsha</option>
+              <option>Abuja</option><option>Kano</option><option>PHC</option>
+            </select></div>
+        </div>
+        <div class="form-group"><label class="form-label">Message (optional)</label>
+          <textarea class="form-input" id="su-msg" rows="2" placeholder="Anything you'd like the admin to know…"></textarea></div>
+        <button class="btn btn-primary btn-block" onclick="submitSignupRequest()" style="padding:14px;font-size:14px;font-weight:700">
+          <i class="ti ti-send"></i> Submit Access Request
+        </button>
+        <button class="btn btn-ghost btn-block" style="margin-top:8px" onclick="window.location.hash='';render()">
+          ← Back to Login
+        </button>
+      </div>
+      <div id="signup-success" style="display:none;text-align:center;padding:20px">
+        <div style="font-size:48px;margin-bottom:12px">✅</div>
+        <div style="font-size:18px;font-weight:800;color:var(--t1);margin-bottom:8px">Request Submitted!</div>
+        <div style="font-size:13px;color:var(--t3);margin-bottom:20px">A Super Admin will review your request and contact you with login details.</div>
+        <button class="btn btn-primary" onclick="window.location.hash='';render()">Back to Login</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function submitSignupRequest() {
+  const name = document.getElementById('su-name')?.value?.trim();
+  const email = document.getElementById('su-email')?.value?.trim();
+  if (!name || !email) { showToast('Name and email required', 'error'); return; }
+  try {
+    await api('POST', '/api/signup-request', {
+      full_name: name, email,
+      phone: document.getElementById('su-phone')?.value,
+      department: document.getElementById('su-dept')?.value,
+      role_requested: document.getElementById('su-role')?.value,
+      depot: document.getElementById('su-depot')?.value,
+      message: document.getElementById('su-msg')?.value,
+    });
+    document.getElementById('signup-form').style.display = 'none';
+    document.getElementById('signup-success').style.display = 'block';
+  } catch(e) {
+    showToast(e.message, 'error');
+  }
+}
+
+// ── ENHANCED DASHBOARD WITH KPIs ──────────────────────────────────────────────
+// Override: add KPI widget to dashboard
+const _origPgDashboard = pgDashboard;
+pgDashboard = async function() {
+  await _origPgDashboard();
+  // Append KPI widgets after render
+  try {
+    const kpi = await api('GET', '/api/kpi/dashboard').catch(() => null);
+    if (!kpi) return;
+    const pc = document.getElementById('page-content');
+    if (!pc) return;
+
+    const isAdmin = ['real_admin','super_admin','admin','operations_manager'].includes(user.role);
+    const iss = kpi.issues || {};
+
+    const kpiHtml = `
+    <div style="margin-top:16px">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--t3);margin-bottom:10px;font-family:'DM Mono',monospace;display:flex;align-items:center;gap:6px">
+        <i class="ti ti-chart-bar" style="font-size:13px"></i> Your KPIs This Month
+      </div>
+      <div class="stat-grid">
+        <div class="stat-card ${iss.open>0?'stat-amber':'stat-green'}" style="cursor:pointer" onclick="navigate('issues')">
+          <div class="stat-label">Open Issues</div>
+          <div class="stat-value">${iss.open||0}</div>
+          <div class="stat-sub">${iss.tagged_to_me||0} tagged to me</div>
+        </div>
+        <div class="stat-card stat-green" style="cursor:pointer" onclick="navigate('issues')">
+          <div class="stat-label">Resolution Rate</div>
+          <div class="stat-value">${iss.resolution_rate||100}%</div>
+          <div class="stat-sub">${iss.resolved||0} resolved</div>
+        </div>
+        ${kpi.trips?.count > 0 ? `
+        <div class="stat-card stat-blue">
+          <div class="stat-label">Trips (30d)</div>
+          <div class="stat-value">${kpi.trips.count}</div>
+          <div class="stat-sub">${fmt(kpi.trips.revenue)}</div>
+        </div>` : ''}
+        ${kpi.payments?.pending > 0 ? `
+        <div class="stat-card stat-amber" style="cursor:pointer" onclick="navigate('requests')">
+          <div class="stat-label">Pending Payments</div>
+          <div class="stat-value">${kpi.payments.pending}</div>
+          <div class="stat-sub">${fmt(kpi.payments.pending_amt)}</div>
+        </div>` : ''}
+      </div>
+
+      ${iss.open > 0 ? `
+      <div style="background:rgba(217,119,6,.06);border:1px solid rgba(217,119,6,.15);border-radius:var(--r-md);padding:12px 16px;margin-top:10px;display:flex;align-items:center;justify-content:space-between;cursor:pointer" onclick="navigate('issues')">
+        <div style="font-size:13px;font-weight:600;color:var(--amber)">
+          <i class="ti ti-alert-circle"></i> ${iss.open} open issue${iss.open>1?'s':''} need attention
+          ${iss.high_priority>0?` · <span style="color:var(--crimson)">${iss.high_priority} high priority</span>`:''}
+        </div>
+        <i class="ti ti-chevron-right" style="color:var(--amber)"></i>
+      </div>` : `
+      <div style="background:rgba(15,165,114,.06);border:1px solid rgba(15,165,114,.15);border-radius:var(--r-md);padding:12px 16px;margin-top:10px;display:flex;align-items:center;gap:8px">
+        <i class="ti ti-circle-check" style="color:var(--emerald)"></i>
+        <span style="font-size:13px;color:var(--emerald);font-weight:600">All issues resolved — great work! 🎉</span>
+      </div>`}
+    </div>`;
+
+    pc.insertAdjacentHTML('beforeend', kpiHtml);
+  } catch(e) {}
+};
+
+// ── ISSUES BADGE ON NAV ───────────────────────────────────────────────────────
+// Add unread count badge to issues nav item
+async function refreshIssuesBadge() {
+  try {
+    const issues = await api('GET', '/api/issues').catch(() => []);
+    const unread = issues.filter(i => !i.is_read && i.status === 'open').length;
+    document.querySelectorAll('[data-page="issues"]').forEach(btn => {
+      const existing = btn.querySelector('.nav-badge');
+      if (existing) existing.remove();
+      if (unread > 0) {
+        btn.insertAdjacentHTML('beforeend', `<span class="nav-badge">${unread}</span>`);
+      }
+    });
+  } catch(e) {}
+}
+
 // ── START ─────────────────────────────────────────────────────────────────────
 // Seed cache with dummy data so pages render instantly
 seedCache();
@@ -7501,7 +8319,17 @@ if (!document.getElementById('spin-style')) {
   } catch {}
 })();
 
-render();
+// Check for signup page hash
+if (window.location.hash === '#signup') {
+  renderSignupPage();
+} else {
+  render();
+  // Refresh issues badge every 2 minutes
+  if (user) {
+    setTimeout(refreshIssuesBadge, 3000);
+    setInterval(refreshIssuesBadge, 120000);
+  }
+}
 </script>
 </body>
 </html>
