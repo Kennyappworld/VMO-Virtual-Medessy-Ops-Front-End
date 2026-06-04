@@ -2349,27 +2349,341 @@ async function pgVehicles() {
       <button class="btn btn-ghost btn-sm" onclick="showUploadVehicles()" style="font-size:11px"><i class="ti ti-upload"></i> Import</button>
       <button class="topbar-action" onclick="showNewVehicle()"><i class="ti ti-plus"></i></button>
     </div>`);
+
   const data = await api('GET', '/api/vehicles');
+  window._vehiclesData = data;
+
+  const today = new Date();
+  const SERVICE_INTERVAL_DAYS = 90; // 3 months default interval
+
+  // Counts for summary
+  let dueSoon = 0, overdue = 0, ok = 0;
+  data.forEach(v => {
+    const s = getVehicleServiceStatus(v, SERVICE_INTERVAL_DAYS);
+    if (s.level === 'overdue') overdue++;
+    else if (s.level === 'due') dueSoon++;
+    else ok++;
+  });
+
   html('page-content', `
-    ${data.map(v => {
-      const days = [v.insurance_expiry, v.road_worthiness_expiry, v.vehicle_license_expiry].map(d => daysLeft(d)).filter(d => d !== null);
-      const minDays = days.length ? Math.min(...days) : 999;
-      const alert = minDays <= 30 ? (minDays <= 0 ? 'red' : 'amber') : 'green';
-      return `<div class="list-item">
-        <div class="list-dot ${alert==='green'?'green':alert==='amber'?'amber':'red'}">
-          <i class="ti ti-truck"></i>
-        </div>
-        <div class="list-body">
-          <div class="list-title">${v.plate_number}</div>
-          <div class="list-sub">${v.make||''} ${v.model||''} · ${v.depot}</div>
-          <div class="list-sub">${v.driver_name||'No driver assigned'}</div>
-          ${minDays <= 30 ? `<div style="margin-top:5px"><span class="badge badge-${minDays<=0?'declined':'pending'} ${minDays<=7?'blink':''}">${minDays<=0?'EXPIRED':'Expires in '+minDays+'d'}</span></div>` : ''}
-        </div>
-        <div class="list-meta"><span class="badge badge-${v.status==='active'?'approved':'declined'}">${v.status}</span></div>
-      </div>`;
-    }).join('') || '<div class="empty-state"><div class="empty-icon"><i class="ti ti-truck"></i></div><div class="empty-title">No vehicles registered</div></div>'}
+    <!-- Summary strip -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <div style="flex:1;min-width:100px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);border-radius:8px;padding:10px 14px">
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px">Compliant</div>
+        <div style="font-size:20px;font-weight:800;color:#22c55e">${ok}</div>
+      </div>
+      <div style="flex:1;min-width:100px;background:rgba(234,179,8,.08);border:1px solid rgba(234,179,8,.2);border-radius:8px;padding:10px 14px">
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px">Due Soon</div>
+        <div style="font-size:20px;font-weight:800;color:#eab308">${dueSoon}</div>
+      </div>
+      <div style="flex:1;min-width:100px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:10px 14px">
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px">Overdue</div>
+        <div style="font-size:20px;font-weight:800;color:#ef4444">${overdue}</div>
+      </div>
+      <div style="flex:1;min-width:100px;background:var(--ink2);border:1px solid var(--b2);border-radius:8px;padding:10px 14px">
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px">Total Fleet</div>
+        <div style="font-size:20px;font-weight:800;color:var(--t1)">${data.length}</div>
+      </div>
+    </div>
+
+    <!-- Filter chips -->
+    <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      ${['All','Overdue','Due Soon','OK'].map(f =>
+        `<button onclick="filterVehiclesTable('${f}')" data-vf="${f}" class="group-chip ${f==='All'?'active':''}">${f}</button>`
+      ).join('')}
+      <div style="flex:1;min-width:140px;display:flex;align-items:center;gap:8px;background:var(--ink2);border:1px solid var(--b2);border-radius:8px;padding:7px 12px">
+        <i class="ti ti-search" style="color:var(--t3);font-size:14px"></i>
+        <input id="veh-search" placeholder="Search plate, driver…" oninput="filterVehiclesTable()" style="background:none;border:none;outline:none;color:var(--t1);font-size:13px;width:100%">
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div style="overflow-x:auto;border-radius:10px;border:1px solid var(--b2)">
+      <table id="veh-table" style="width:100%;border-collapse:collapse;font-size:12px;min-width:1000px">
+        <thead>
+          <tr style="background:var(--ink3)">
+            ${['Plate No.','Make / Model','Driver','Depot','Status','Last Service','Next Service Due','Service Health','Compliance','Actions'].map(h =>
+              `<th style="padding:10px 12px;text-align:left;color:var(--t3);font-size:10px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;border-bottom:2px solid var(--b2);font-family:'DM Mono',monospace">${h}</th>`
+            ).join('')}
+          </tr>
+        </thead>
+        <tbody id="veh-tbody">
+          ${data.map((v, i) => {
+            const svc = getVehicleServiceStatus(v, SERVICE_INTERVAL_DAYS);
+            const compDays = [v.insurance_expiry, v.road_worthiness_expiry, v.vehicle_license_expiry].map(d => daysLeft(d)).filter(d => d !== null);
+            const minComp = compDays.length ? Math.min(...compDays) : 999;
+            const compAlert = minComp <= 0 ? 'red' : minComp <= 30 ? 'amber' : 'green';
+            const bg = i%2===0 ? 'transparent' : 'rgba(255,255,255,.015)';
+            const svcLevel = svc.level; // 'ok','due','overdue'
+            return `<tr class="veh-row" data-vid="${v.id}"
+              data-svc="${svcLevel}"
+              data-search="${[v.plate_number||'', v.make||'', v.model||'', v.driver_name||'', v.depot||''].join(' ').toLowerCase()}"
+              style="border-bottom:1px solid var(--b2);background:${bg};cursor:pointer;transition:background .15s"
+              onmouseover="this.style.background='rgba(201,168,76,.04)'" onmouseout="this.style.background='${bg}'"
+              onclick="showVehicleDetail(${v.id})">
+              <td style="padding:10px 12px">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <div style="width:8px;height:8px;border-radius:50%;background:${svcLevel==='overdue'?'#ef4444':svcLevel==='due'?'#eab308':'#22c55e'};flex-shrink:0"></div>
+                  <span style="font-weight:700;color:var(--t1);font-family:'DM Mono',monospace;letter-spacing:.5px">${sanitise(v.plate_number||'')}</span>
+                </div>
+              </td>
+              <td style="padding:10px 12px;color:var(--t2)">${sanitise((v.make||'')+(v.model?' '+v.model:''))}</td>
+              <td style="padding:10px 12px;color:var(--t2)">${sanitise(v.driver_name||'Unassigned')}</td>
+              <td style="padding:10px 12px;color:var(--t3);font-size:11px">${sanitise(v.depot||'—')}</td>
+              <td style="padding:10px 12px"><span class="badge badge-${v.status==='active'?'approved':'declined'}" style="font-size:10px">${v.status||'—'}</span></td>
+              <td style="padding:10px 12px;color:var(--t2);font-size:11px">
+                ${v.last_service_date ? `<div>${fmtDate(v.last_service_date)}</div>${v.last_service_km?`<div style="color:var(--t3);font-size:10px">${(v.last_service_km||0).toLocaleString()} km</div>`:''}` : '<span style="color:var(--t3)">—</span>'}
+              </td>
+              <td style="padding:10px 12px">
+                ${svc.nextDate ? `
+                  <div style="font-size:11px;color:${svcLevel==='overdue'?'#ef4444':svcLevel==='due'?'#eab308':'var(--t2)'};font-weight:${svcLevel!=='ok'?'700':'400'}">${fmtDate(svc.nextDate)}</div>
+                  <div style="font-size:10px;color:var(--t3)">${svc.daysLeft >= 0 ? 'in '+svc.daysLeft+'d' : Math.abs(svc.daysLeft)+'d overdue'}</div>
+                ` : '<span style="color:var(--t3);font-size:11px">Not set</span>'}
+              </td>
+              <td style="padding:10px 12px">
+                <div style="display:flex;align-items:center;gap:6px">
+                  <div style="flex:1;height:5px;background:var(--ink4);border-radius:99px;overflow:hidden;min-width:60px">
+                    <div style="height:100%;width:${svc.pct}%;background:${svcLevel==='overdue'?'#ef4444':svcLevel==='due'?'#eab308':'#22c55e'};transition:width .3s"></div>
+                  </div>
+                  <span class="badge badge-${svcLevel==='overdue'?'declined':svcLevel==='due'?'pending':'approved'}" style="font-size:9px;padding:2px 6px">${svcLevel==='overdue'?'OVERDUE':svcLevel==='due'?'DUE SOON':'OK'}</span>
+                </div>
+              </td>
+              <td style="padding:10px 12px">
+                ${minComp <= 30 ? `<span class="badge badge-${compAlert==='red'?'declined':'pending'} ${minComp<=7?'blink':''}" style="font-size:9px">${minComp<=0?'EXPIRED':'Exp '+minComp+'d'}</span>` : '<span style="font-size:11px;color:var(--t3)">✓</span>'}
+              </td>
+              <td style="padding:10px 12px;white-space:nowrap" onclick="event.stopPropagation()">
+                <div style="display:flex;gap:4px">
+                  ${svcLevel !== 'ok' ? `<button class="btn btn-success btn-sm" style="padding:3px 8px;font-size:10px;background:rgba(34,197,94,.15);color:#22c55e;border-color:rgba(34,197,94,.3)" onclick="showConfirmService(${v.id})" title="Log service"><i class="ti ti-tool"></i> Service</button>` : ''}
+                  <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 7px" onclick="showVehicleDetail(${v.id})" title="View details"><i class="ti ti-info-circle"></i></button>
+                </div>
+              </td>
+            </tr>`;
+          }).join('') || `<tr><td colspan="10" style="padding:40px;text-align:center;color:var(--t3)">No vehicles registered</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    <div style="font-size:11px;color:var(--t3);margin-top:8px;text-align:right">${data.length} vehicle${data.length!==1?'s':''} in fleet</div>
   `);
 }
+
+function getVehicleServiceStatus(v, intervalDays) {
+  intervalDays = intervalDays || 90;
+  const today = new Date(); today.setHours(0,0,0,0);
+  let nextDate = null;
+
+  // Priority: use next_service_date if set, else calculate from last_service_date
+  if (v.next_service_date) {
+    nextDate = new Date(v.next_service_date);
+  } else if (v.last_service_date) {
+    nextDate = new Date(v.last_service_date);
+    nextDate.setDate(nextDate.getDate() + intervalDays);
+  }
+
+  if (!nextDate) return { level: 'ok', nextDate: null, daysLeft: 999, pct: 100 };
+
+  const daysLeft = Math.round((nextDate - today) / (1000*60*60*24));
+  const totalWindow = intervalDays;
+  const elapsed = totalWindow - daysLeft;
+  const pct = Math.max(0, Math.min(100, Math.round((elapsed / totalWindow) * 100)));
+
+  let level = 'ok';
+  if (daysLeft < 0) level = 'overdue';
+  else if (daysLeft <= 14) level = 'due';
+
+  return { level, nextDate, daysLeft, pct };
+}
+
+function filterVehiclesTable(filter) {
+  if (filter) {
+    document.querySelectorAll('[data-vf]').forEach(b => b.classList.toggle('active', b.dataset.vf===filter));
+    window._vehFilter = filter;
+  }
+  const f = (window._vehFilter||'All').toLowerCase();
+  const q = (document.getElementById('veh-search')?.value||'').toLowerCase();
+  document.querySelectorAll('.veh-row').forEach(row => {
+    const svc = row.dataset.svc;
+    const matchFilter = f==='all' || (f==='overdue'&&svc==='overdue') || (f==='due soon'&&svc==='due') || (f==='ok'&&svc==='ok');
+    const matchSearch = !q || (row.dataset.search||'').includes(q);
+    row.style.display = matchFilter && matchSearch ? '' : 'none';
+  });
+}
+
+function showVehicleDetail(id) {
+  const data = window._vehiclesData || [];
+  const v = data.find(x => x.id === id);
+  if (!v) return;
+  const svc = getVehicleServiceStatus(v, 90);
+  const history = v.service_history || [];
+
+  showModal(`${sanitise(v.plate_number||'')} — ${sanitise((v.make||'')+' '+(v.model||''))}`, `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+      <div style="background:var(--ink3);border-radius:8px;padding:12px">
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;margin-bottom:8px;letter-spacing:.5px">Vehicle Info</div>
+        ${[['Plate',v.plate_number],['Make/Model',(v.make||'')+(v.model?' '+v.model:'')],['Fuel',v.fuel_type],['Depot',v.depot],['Driver',v.driver_name||'Unassigned'],['Status',v.status]].map(([k,val])=>
+          `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--b2)"><span style="color:var(--t3);font-size:11px">${k}</span><span style="color:var(--t1);font-size:11px;font-weight:600">${sanitise(String(val||'—'))}</span></div>`
+        ).join('')}
+      </div>
+      <div style="background:var(--ink3);border-radius:8px;padding:12px">
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;margin-bottom:8px;letter-spacing:.5px">Service Status</div>
+        ${[['Last Service',fmtDate(v.last_service_date)||'Not recorded'],['Last Svc KM',v.last_service_km?(v.last_service_km.toLocaleString()+' km'):'—'],['Next Due',svc.nextDate?fmtDate(svc.nextDate):'Not set'],['Days Left',svc.nextDate?(svc.daysLeft>=0?svc.daysLeft+'d':Math.abs(svc.daysLeft)+'d overdue'):'—']].map(([k,val])=>
+          `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--b2)"><span style="color:var(--t3);font-size:11px">${k}</span><span style="color:${k==='Days Left'&&svc.level==='overdue'?'#ef4444':k==='Days Left'&&svc.level==='due'?'#eab308':'var(--t1)'};font-size:11px;font-weight:600">${val}</span></div>`
+        ).join('')}
+      </div>
+    </div>
+
+    <!-- Compliance dates -->
+    <div style="background:var(--ink3);border-radius:8px;padding:12px;margin-bottom:14px">
+      <div style="font-size:10px;color:var(--t3);text-transform:uppercase;margin-bottom:8px;letter-spacing:.5px">Compliance Documents</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        ${[['Insurance',v.insurance_expiry],['Road Worthy',v.road_worthiness_expiry],['Vehicle License',v.vehicle_license_expiry]].map(([k,d])=>{
+          const dl = daysLeft(d);
+          const col = dl===null?'var(--t3)':dl<=0?'#ef4444':dl<=30?'#eab308':'#22c55e';
+          return `<div style="text-align:center;padding:8px;background:var(--ink4);border-radius:6px">
+            <div style="font-size:10px;color:var(--t3);margin-bottom:4px">${k}</div>
+            <div style="font-size:12px;font-weight:700;color:${col}">${d?fmtDate(d):'—'}</div>
+            ${dl!==null?`<div style="font-size:10px;color:${col}">${dl<=0?'EXPIRED':dl+'d left'}</div>`:''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    ${history.length ? `
+    <div style="background:var(--ink3);border-radius:8px;padding:12px;margin-bottom:14px">
+      <div style="font-size:10px;color:var(--t3);text-transform:uppercase;margin-bottom:8px;letter-spacing:.5px">Service History</div>
+      <div style="max-height:160px;overflow-y:auto">
+        ${history.slice().reverse().map(h => `
+          <div style="display:flex;justify-content:space-between;align-items:start;padding:6px 0;border-bottom:1px solid var(--b2)">
+            <div>
+              <div style="font-size:12px;font-weight:600;color:var(--t1)">${sanitise(h.type||'Service')}</div>
+              <div style="font-size:11px;color:var(--t3)">${sanitise(h.workshop||'')}${h.parts?' · '+sanitise(h.parts):''}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;margin-left:12px">
+              <div style="font-size:11px;color:var(--t2)">${fmtDate(h.date)}</div>
+              ${h.cost?`<div style="font-size:11px;color:var(--gold);font-weight:600">${fmt(h.cost)}</div>`:''}
+              ${h.odometer?`<div style="font-size:10px;color:var(--t3)">${h.odometer.toLocaleString()} km</div>`:''}
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-block" onclick="closeModal();showConfirmService(${id})"><i class="ti ti-tool"></i> Log Service</button>
+      <button class="btn btn-ghost btn-block" onclick="closeModal()">Close</button>
+    </div>`, 'lg');
+}
+
+function showConfirmService(id) {
+  const data = window._vehiclesData || [];
+  const v = data.find(x => x.id === id);
+  if (!v) return;
+  const today = new Date().toISOString().slice(0,10);
+  // Default next service = 3 months from today
+  const nextDefault = new Date(); nextDefault.setDate(nextDefault.getDate()+90);
+  const nextDefaultStr = nextDefault.toISOString().slice(0,10);
+
+  showModal(`Log Service — ${sanitise(v.plate_number||'')}`, `
+    <div style="background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.2);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#22c55e">
+      <i class="ti ti-tool"></i> Confirming service will update the last service date and set the next service due date.
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Service Date <span style="color:var(--red)">*</span></label>
+        <input class="form-input" type="date" id="svc-date" value="${today}"></div>
+      <div class="form-group"><label class="form-label">Odometer at Service (km)</label>
+        <input class="form-input" type="number" id="svc-odo" placeholder="${v.last_service_km||0}" value="${v.last_service_km||''}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Service Type</label>
+        <select class="form-input" id="svc-type">
+          <option>Preventive (Routine)</option>
+          <option>Oil & Filter Change</option>
+          <option>Tyre Change</option>
+          <option>Clutch Replacement</option>
+          <option>Engine Overhaul</option>
+          <option>Brake Service</option>
+          <option>Corrective (Breakdown)</option>
+        </select></div>
+      <div class="form-group"><label class="form-label">Cost (₦)</label>
+        <input class="form-input" type="number" id="svc-cost" placeholder="0"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Workshop / Mechanic</label>
+        <input class="form-input" id="svc-ws" placeholder="e.g. Lagos Auto Workshop"></div>
+      <div class="form-group"><label class="form-label">Parts Replaced</label>
+        <input class="form-input" id="svc-parts" placeholder="Oil filter, spark plugs…"></div>
+    </div>
+
+    <div style="background:var(--ink3);border-radius:8px;padding:12px;margin-bottom:14px">
+      <div style="font-size:11px;font-weight:700;color:var(--t1);margin-bottom:8px">📅 Next Service Schedule</div>
+      <div class="form-row" style="margin-bottom:0">
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">Next Service Date <span style="color:var(--red)">*</span></label>
+          <input class="form-input" type="date" id="svc-next" value="${nextDefaultStr}"></div>
+        <div class="form-group" style="margin-bottom:0"><label class="form-label">Or set interval</label>
+          <select class="form-input" id="svc-interval" onchange="setNextServiceDate()">
+            <option value="">Custom date above</option>
+            <option value="30">1 month (30 days)</option>
+            <option value="60">2 months (60 days)</option>
+            <option value="90" selected>3 months (90 days)</option>
+            <option value="120">4 months (120 days)</option>
+            <option value="180">6 months (180 days)</option>
+            <option value="365">1 year (365 days)</option>
+          </select></div>
+      </div>
+    </div>
+
+    <div class="form-group"><label class="form-label">Notes</label>
+      <input class="form-input" id="svc-notes" placeholder="Additional notes about this service…"></div>
+
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn btn-primary btn-block" onclick="submitConfirmService(${id})"><i class="ti ti-check"></i> Confirm & Save Service</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+function setNextServiceDate() {
+  const days = parseInt(document.getElementById('svc-interval')?.value);
+  if (!days) return;
+  const svcDate = document.getElementById('svc-date')?.value;
+  const base = svcDate ? new Date(svcDate) : new Date();
+  base.setDate(base.getDate() + days);
+  const next = document.getElementById('svc-next');
+  if (next) next.value = base.toISOString().slice(0,10);
+}
+
+async function submitConfirmService(id) {
+  const svcDate = document.getElementById('svc-date')?.value;
+  const nextDate = document.getElementById('svc-next')?.value;
+  if (!svcDate) { alert('Service date is required'); return; }
+  if (!nextDate) { alert('Next service date is required'); return; }
+
+  const payload = {
+    last_service_date: svcDate,
+    next_service_date: nextDate,
+    last_service_km: parseInt(document.getElementById('svc-odo')?.value) || undefined,
+    service_type: document.getElementById('svc-type')?.value,
+    service_cost: parseFloat(document.getElementById('svc-cost')?.value) || undefined,
+    service_workshop: document.getElementById('svc-ws')?.value,
+    service_parts: document.getElementById('svc-parts')?.value,
+    service_notes: document.getElementById('svc-notes')?.value,
+  };
+
+  try {
+    // Try dedicated service confirm endpoint first
+    await api('POST', `/api/vehicles/${id}/service`, payload).catch(async () => {
+      // Fallback: PATCH the vehicle record directly
+      await api('PATCH', `/api/vehicles/${id}`, {
+        last_service_date: payload.last_service_date,
+        next_service_date: payload.next_service_date,
+        last_service_km: payload.last_service_km,
+      });
+    });
+    clearCache();
+    closeModal();
+    showToast(`Service logged for ${(window._vehiclesData||[]).find(v=>v.id===id)?.plate_number||'vehicle'}. Next due: ${fmtDate(nextDate)}`, 'success');
+    navigate('vehicles');
+  } catch(e) { alert('Could not save: ' + e.message); }
+}
+
+
 function showNewVehicle() {
   showModal('Add Vehicle', `
     <div class="form-row">
