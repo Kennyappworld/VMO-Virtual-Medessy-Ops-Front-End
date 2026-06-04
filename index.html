@@ -6315,8 +6315,11 @@ async function pgUsers() {
               <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 8px" onclick="showEditUser(${u.id},'${sanitise(u.name||u.full_name||'')}','${sanitise(u.role||'')}','${sanitise(u.department||'')}','${sanitise(u.depot||'')}')">
                 <i class="ti ti-edit"></i>
               </button>
-              <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 8px" onclick="resetUserPassword(${u.id},'${sanitise(u.name||u.full_name||'')}')">
+              <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 8px" onclick="resetUserPassword(${u.id},'${sanitise(u.name||u.full_name||'')}')" title="Reset password">
                 <i class="ti ti-key"></i>
+              </button>
+              <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 8px" onclick="resendCredentials(${u.id},'${sanitise(u.email||'')}')" title="Resend login via WhatsApp/Email">
+                <i class="ti ti-send"></i>
               </button>
             </div>` : ''}
           </div>`).join('')}
@@ -6397,22 +6400,77 @@ async function approveSignup(id, name, roleReq, deptReq) {
 }
 
 async function confirmApproveSignup(id) {
+  const btn = document.querySelector('.modal button.btn-primary');
+  if (btn) { btn.innerHTML = '<span class="spinner"></span> Creating account…'; btn.disabled = true; }
   try {
     const result = await api('PATCH', `/api/signup-requests/${id}/approve`, {
-      role: document.getElementById('as-role')?.value,
+      role:       document.getElementById('as-role')?.value,
       department: document.getElementById('as-dept')?.value,
     });
     closeModal();
-    showModal('✅ Account Created', `
-      <div style="background:var(--ink3);border-radius:var(--r-md);padding:16px;margin-bottom:14px">
-        <div style="font-size:13px;font-weight:700;margin-bottom:8px">Temporary Password</div>
-        <div style="font-family:'DM Mono',monospace;font-size:18px;color:var(--gold);letter-spacing:2px">${sanitise(result.temp_password||'')}</div>
-        <div style="font-size:11px;color:var(--t3);margin-top:6px">Share this securely. User should change it on first login.</div>
+    const d = result.delivery || {};
+    const emailOk    = d.email    ? '✅' : '❌';
+    const waOk       = d.whatsapp ? '✅' : '❌';
+    const userId     = result.user?.id;
+    const userEmail  = result.user?.email || '';
+    const tempPass   = result.temp_password || '';
+
+    showModal('Account Created', `
+      <!-- Delivery status banner -->
+      <div style="background:${d.email||d.whatsapp?'rgba(15,165,114,.08)':'rgba(217,119,6,.08)'};border:1px solid ${d.email||d.whatsapp?'rgba(15,165,114,.2)':'rgba(217,119,6,.2)'};border-radius:var(--r-md);padding:14px;margin-bottom:16px">
+        <div style="font-size:13px;font-weight:700;color:${d.email||d.whatsapp?'var(--emerald)':'var(--amber)'};margin-bottom:10px">
+          ${d.email||d.whatsapp?'Credentials Delivered Automatically':'⚠️ Auto-delivery incomplete — share manually'}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div style="background:var(--ink3);border-radius:var(--r-sm);padding:10px;text-align:center">
+            <div style="font-size:20px;margin-bottom:4px">${emailOk}</div>
+            <div style="font-size:11px;color:var(--t3)">Email</div>
+          </div>
+          <div style="background:var(--ink3);border-radius:var(--r-sm);padding:10px;text-align:center">
+            <div style="font-size:20px;margin-bottom:4px">${waOk}</div>
+            <div style="font-size:11px;color:var(--t3)">WhatsApp</div>
+          </div>
+        </div>
+        ${d.message ? `<div style="font-size:11px;color:var(--t3);margin-top:8px">${sanitise(d.message)}</div>` : ''}
       </div>
-      <button class="btn btn-primary btn-block" onclick="navigator.clipboard?.writeText('${sanitise(result.temp_password||'')}');showToast('Copied!','success')">
-        <i class="ti ti-copy"></i> Copy Password
-      </button>
-      <button class="btn btn-ghost btn-block" style="margin-top:6px" onclick="closeModal();navigate('users')">Done</button>`);
+
+      <!-- Credentials box — always show for manual backup -->
+      <div style="background:var(--ink3);border-radius:var(--r-md);padding:14px;margin-bottom:14px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--t3);margin-bottom:10px;font-family:'DM Mono',monospace">Credentials (keep safe)</div>
+        <div style="margin-bottom:8px">
+          <div style="font-size:10px;color:var(--t3)">Email</div>
+          <div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--t1)">${sanitise(userEmail)}</div>
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--t3)">Temporary Password</div>
+          <div style="font-family:'DM Mono',monospace;font-size:20px;color:var(--gold);letter-spacing:3px">${sanitise(tempPass)}</div>
+        </div>
+        <div style="font-size:11px;color:var(--t3);margin-top:8px">User must change this on first login.</div>
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary btn-sm" style="flex:1" onclick="navigator.clipboard?.writeText('${sanitise(tempPass)}');showToast('Password copied!','success')">
+          <i class="ti ti-copy"></i> Copy Password
+        </button>
+        ${userId ? `<button class="btn btn-ghost btn-sm" onclick="resendCredentials(${userId},'${sanitise(userEmail)}')">
+          <i class="ti ti-send"></i> Resend
+        </button>` : ''}
+      </div>
+      <button class="btn btn-ghost btn-block" style="margin-top:8px" onclick="closeModal();navigate('users')">Done</button>`);
+  } catch(e) { alert(e.message); }
+}
+
+async function resendCredentials(userId, email) {
+  if (!confirm(`Resend login credentials to ${email}? This will generate a new password.`)) return;
+  try {
+    const result = await api('POST', `/api/users/${userId}/resend-credentials`);
+    const d = result.delivery || {};
+    showToast(
+      d.email || d.whatsapp
+        ? `✅ Credentials resent (Email: ${d.email?'✓':'✗'} WhatsApp: ${d.whatsapp?'✓':'✗'})`
+        : `New password: ${result.new_password} — delivery failed, share manually`,
+      d.email || d.whatsapp ? 'success' : 'error'
+    );
   } catch(e) { alert(e.message); }
 }
 
@@ -6499,7 +6557,7 @@ function renderSignupPage() {
           <div class="form-group"><label class="form-label">Email *</label><input class="form-input" type="email" id="su-email" placeholder="you@medessy.com"></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="su-phone" placeholder="0801234567" type="tel"></div>
+          <div class="form-group"><label class="form-label">Phone <span style="color:var(--crimson)">*</span> <span style="color:var(--t3);font-weight:400;text-transform:none;font-size:10px">(required — credentials delivered here)</span></label><input class="form-input" id="su-phone" placeholder="0801234567" type="tel" required></div>
           <div class="form-group"><label class="form-label">Department</label><input class="form-input" id="su-dept" placeholder="e.g. Operations"></div>
         </div>
         <div class="form-row">
@@ -6539,13 +6597,19 @@ function renderSignupPage() {
 }
 
 async function submitSignupRequest() {
-  const name = document.getElementById('su-name')?.value?.trim();
+  const name  = document.getElementById('su-name')?.value?.trim();
   const email = document.getElementById('su-email')?.value?.trim();
-  if (!name || !email) { showToast('Name and email required', 'error'); return; }
+  const phone = document.getElementById('su-phone')?.value?.trim();
+  if (!name || !email) { showToast('Name and email are required', 'error'); return; }
+  if (!phone || phone.length < 7) {
+    const f = document.getElementById('su-phone');
+    if (f) { f.style.border = '1px solid var(--crimson)'; f.focus(); }
+    showToast('Phone number is required — credentials will be delivered here', 'error');
+    return;
+  }
   try {
     await api('POST', '/api/signup-request', {
-      full_name: name, email,
-      phone: document.getElementById('su-phone')?.value,
+      full_name: name, email, phone,
       department: document.getElementById('su-dept')?.value,
       role_requested: document.getElementById('su-role')?.value,
       depot: document.getElementById('su-depot')?.value,
