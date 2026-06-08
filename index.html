@@ -1408,7 +1408,8 @@ async function pgRequests() {
       <button class="btn btn-ghost btn-sm" onclick="showBulkRequests()" style="font-size:11px"><i class="ti ti-files"></i> Bulk Add</button>
       <button class="topbar-action" onclick="showNewRequest()"><i class="ti ti-plus"></i></button>
     </div>`);
-  const data = await api('GET', '/api/requests');
+  // Super admin always fetches all — backend handles via JWT role
+  const data = await api('GET', '/api/requests' + (['super_admin','real_admin','admin'].includes(user?.role) ? '?all=1' : ''));
   window._lastRequests = data;
   const pending = data.filter(r=>r.status==='pending');
   const approved = data.filter(r=>r.status==='approved');
@@ -2159,6 +2160,288 @@ async function showNewFuel(preShipment) {
 }
 
 
+
+// ── DELETE GUARDS (Super Admin only) ─────────────────────────────────────────
+async function deleteVehicleSA(id, plate) {
+  if (!['super_admin','real_admin','admin'].includes(user?.role)) {
+    showToast('Only Super Admin can delete vehicles','error'); return;
+  }
+  if (!confirm(`Permanently delete vehicle ${plate}?\n\nThis cannot be undone.`)) return;
+  try {
+    await api('DELETE', `/api/vehicles/${id}`);
+    clearCache(); showToast(`Vehicle ${plate} deleted`,'success'); navigate('vehicles');
+  } catch(e) { alert(e.message||'Delete failed'); }
+}
+
+async function showDriverDetail(id) {
+  const data = await api('GET','/api/drivers').catch(()=>[]);
+  const d = data.find(x=>x.id===id);
+  if (!d) return;
+  const days = daysLeft(d.license_expiry);
+  showModal(d.full_name||d.name, `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+      ${[
+        ['Phone', d.phone||'—'],
+        ['Depot', d.depot||'—'],
+        ['License No.', d.license_number||'—'],
+        ['License Expiry', d.license_expiry?fmtDate(d.license_expiry)+(days!==null?' ('+days+'d)':''):'—'],
+        ['Bank', d.bank_name||'—'],
+        ['Account No.', d.account_number||'—'],
+        ['Account Name', d.account_name||'—'],
+        ['Status', d.active===false?'Suspended':'Active'],
+      ].map(([l,v])=>`
+        <div style="background:var(--bg3);border-radius:8px;padding:9px">
+          <div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">${l}</div>
+          <div style="font-size:12px;font-weight:600;color:var(--text)">${sanitise(String(v))}</div>
+        </div>`).join('')}
+    </div>
+    <button class="btn btn-ghost btn-block" onclick="closeModal()">Close</button>
+  `);
+}
+
+async function deleteDriverSA(id, name) {
+  if (!['super_admin','real_admin','admin'].includes(user?.role)) {
+    showToast('Only Super Admin can delete drivers','error'); return;
+  }
+  if (!confirm(`Permanently delete driver ${name}?\n\nThis cannot be undone.`)) return;
+  try {
+    await api('DELETE', `/api/drivers/${id}`);
+    clearCache(); showToast(`Driver ${name} deleted`,'success'); navigate('drivers');
+  } catch(e) { alert(e.message||'Delete failed'); }
+}
+
+// ── ACCOUNTS BULK PAYMENT TEMPLATE ────────────────────────────────────────────
+
+
+async function showUploadPaymentCSV() {
+  if (!['accounts','super_admin','real_admin','admin'].includes(user?.role)) {
+    showToast('Only Accounts department can upload payment templates','error'); return;
+  }
+  showModal('Upload Payment Requests (Accounts)', `
+    <div style="background:rgba(201,168,76,.07);border:1px solid rgba(201,168,76,.2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--gold)">
+      <i class="ti ti-info-circle" style="margin-right:5px"></i>
+      <strong>Accounts Dept only.</strong> Download the template, fill it in, then attach it here. Super Admin can view all uploaded transactions.
+    </div>
+    <div style="margin-bottom:12px">
+      <button class="btn btn-ghost btn-sm" onclick="downloadPaymentTemplate()">
+        <i class="ti ti-download"></i> Download Template First
+      </button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Attach filled CSV template</label>
+      <input type="file" id="pay-csv-file" accept=".csv" class="form-input" style="padding:8px">
+    </div>
+    <div id="pay-csv-preview" style="display:none;margin-top:10px;max-height:200px;overflow-y:auto"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-ghost btn-sm" onclick="previewPaymentCSV()"><i class="ti ti-eye"></i> Preview</button>
+      <button class="btn btn-primary btn-block" onclick="submitPaymentCSV()">Submit All Requests</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+function previewPaymentCSV() {
+  const file = el('pay-csv-file')?.files?.[0];
+  if (!file) { alert('Please select a file first'); return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    const lines = e.target.result.split('\n').filter(l => !l.startsWith('"//') && l.trim());
+    if (!lines.length) { alert('File appears empty or invalid'); return; }
+    const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g,'').trim());
+    const rows = lines.slice(1).map(l => {
+      const vals = l.match(/(".*?"|[^,]+)(?=,|$)/g) || l.split(',');
+      return vals.map(v => v.replace(/^"|"$/g,'').trim());
+    }).filter(r => r.some(v => v));
+
+    window._csvHeaders = headers;
+    window._csvRows = rows;
+
+    const preview = el('pay-csv-preview');
+    preview.style.display = '';
+    preview.innerHTML = `
+      <div style="font-size:11px;color:var(--green);margin-bottom:8px"><i class="ti ti-check"></i> ${rows.length} row(s) ready to import</div>
+      <table style="width:100%;border-collapse:collapse;font-size:10px">
+        <thead><tr>${headers.map(h=>`<th style="padding:4px 6px;background:var(--bg3);border:1px solid var(--border);white-space:nowrap">${h}</th>`).join('')}</tr></thead>
+        <tbody>${rows.slice(0,5).map(r=>`<tr>${r.map(v=>`<td style="padding:3px 6px;border:1px solid var(--border);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${sanitise(v)}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>
+      ${rows.length>5?`<div style="font-size:10px;color:var(--text3);margin-top:4px">... and ${rows.length-5} more rows</div>`:''}
+    `;
+  };
+  reader.readAsText(file);
+}
+
+async function submitPaymentCSV() {
+  const headers = window._csvHeaders;
+  const rows = window._csvRows;
+  if (!rows?.length) { alert('Please preview the file first'); return; }
+
+  const idx = k => headers.findIndex(h => h.toLowerCase()===k.toLowerCase());
+  let ok = 0, fail = 0;
+
+  for (const row of rows) {
+    const get = k => row[idx(k)] || '';
+    const payload = {
+      description: get('description'),
+      category: get('category') || 'OTHER OVH',
+      amount: parseFloat(get('amount'))||0,
+      amount_to_pay: parseFloat(get('pay_now')||get('amount'))||0,
+      payment_type: get('payment_type') || 'cash',
+      credit_terms: get('credit_terms'),
+      payee_name: get('payee_name'),
+      bank_name: get('bank_name'),
+      account_number: get('account_number'),
+      account_name: get('account_name'),
+      priority: get('priority') || 'normal',
+      shipment_number: get('shipment_number'),
+      customer_name: get('customer_name'),
+      waybill_number: get('waybill_number'),
+      notes: get('notes'),
+      source: 'csv_upload',
+    };
+    if (!payload.description || !payload.amount) { fail++; continue; }
+    try { await api('POST','/api/requests', payload); ok++; }
+    catch(e) { fail++; }
+  }
+  closeModal();
+  showToast(`${ok} request(s) submitted${fail?', '+fail+' skipped (missing data)':''}`, ok?'success':'error');
+  clearCache(); navigate('requests');
+}
+
+// ── TRIP TEMPLATE DOWNLOAD ────────────────────────────────────────────────────
+function downloadTripTemplate() {
+  const headers = [
+    'trip_date','company_name','plate_number','driver_name',
+    'waybill_number','invoice_number','shipment_number',
+    'loading_site','offloading_site','to_km','standard_transit_hrs',
+    'customer_name','customer_phone','delivery_address','load_description',
+    'plant_arrival','plant_departure','depot_arrival','depot_departure','return_plant_arrival',
+    'rate','pallet_size','outward_value','return_value','total_diesel','bit_allowance',
+    'area','availability_code','notes',
+    'multi_customer_count',
+    'mc1_name','mc1_phone','mc1_address','mc1_load','mc1_qty',
+    'mc2_name','mc2_phone','mc2_address','mc2_load','mc2_qty',
+    'mc3_name','mc3_phone','mc3_address','mc3_load','mc3_qty',
+  ];
+  const sample = [
+    '2026-06-08','Medessy Lagos','LAG-234-AB','Tunde Bakare',
+    'WB-2026-001','INV-2026-001','285029',
+    'ABINBEV ONITSHA','Warri','57','2.5',
+    'JUNDO BROTHERS','08012345678','No 5 Warri Road','Corn Malt 15 tons',
+    '2026-06-08T08:00','2026-06-08T10:30','2026-06-08T13:00','2026-06-08T14:00','2026-06-08T17:00',
+    '85000','1','85000','0','200','5000',
+    'Delta','01','Smooth delivery',
+    '1',
+    'JUNDO BROTHERS','08012345678','No 5 Warri Road','Corn Malt 15 tons','15 tons',
+    '','','','','',
+    '','','','','',
+  ];
+  const notes = [
+    ['// VMO Trip Log Bulk Template'],
+    ['// availability_code: 01=To Trip 02=From Trip 03=At Customer 04=On Site 05=Break Down 06=Task Force 07=Dispatch Delay 08=Driver Idling 09=No Driver'],
+    ['// For multi-customer deliveries: set multi_customer_count (1-3) and fill mc1_, mc2_, mc3_ columns'],
+    ['// For single customer: set multi_customer_count=1 and fill only mc1_ columns (or use customer_name/phone/delivery_address)'],
+    ['// plant_arrival format: YYYY-MM-DDTHH:MM (e.g. 2026-06-08T08:00)'],
+    ['// DELETE all rows starting with // before uploading'],
+  ];
+  const rows = [...notes, headers, sample];
+  const csv = rows.map(r => r.map(c => `"${String(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `VMO_TripLog_Template_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  showToast('Trip template downloaded','success');
+}
+
+async function showUploadTrips() {
+  showModal('Upload Trip Logs', `
+    <div style="background:rgba(201,168,76,.07);border:1px solid rgba(201,168,76,.2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--gold)">
+      <i class="ti ti-info-circle" style="margin-right:5px"></i>
+      Download the template, fill in trip details, attach here. Multi-customer columns supported.
+    </div>
+    <div style="margin-bottom:12px">
+      <button class="btn btn-ghost btn-sm" onclick="downloadTripTemplate()">
+        <i class="ti ti-download"></i> Download Template
+      </button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Attach filled CSV</label>
+      <input type="file" id="trip-csv-file" accept=".csv" class="form-input" style="padding:8px">
+    </div>
+    <div id="trip-csv-preview" style="display:none;margin-top:10px"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-ghost btn-sm" onclick="previewTripCSV()"><i class="ti ti-eye"></i> Preview</button>
+      <button class="btn btn-primary btn-block" onclick="submitTripCSV()">Upload Trips</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+function previewTripCSV() {
+  const file = el('trip-csv-file')?.files?.[0];
+  if (!file) { alert('Select a file first'); return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    const lines = e.target.result.split('\n').filter(l => !l.startsWith('"//') && l.trim());
+    const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g,'').trim());
+    const rows = lines.slice(1).map(l => {
+      const vals = l.match(/(".*?"|[^,]+)(?=,|$)/g) || l.split(',');
+      return vals.map(v => v.replace(/^"|"$/g,'').trim());
+    }).filter(r => r.some(v => v));
+    window._tripCsvHeaders = headers;
+    window._tripCsvRows = rows;
+    const prev = el('trip-csv-preview');
+    prev.style.display = '';
+    prev.innerHTML = `<div style="font-size:11px;color:var(--green)"><i class="ti ti-check"></i> ${rows.length} trip(s) ready</div>`;
+  };
+  reader.readAsText(file);
+}
+
+async function submitTripCSV() {
+  const headers = window._tripCsvHeaders;
+  const rows = window._tripCsvRows;
+  if (!rows?.length) { alert('Preview the file first'); return; }
+  const idx = k => headers.findIndex(h => h.toLowerCase()===k.toLowerCase());
+  let ok = 0, fail = 0;
+  for (const row of rows) {
+    const g = k => row[idx(k)] || '';
+    const multiCount = parseInt(g('multi_customer_count'))||1;
+    let multiCustomers = null;
+    if (multiCount > 1) {
+      multiCustomers = [];
+      for (let i=1; i<=multiCount; i++) {
+        const n=g(`mc${i}_name`),ph=g(`mc${i}_phone`),ad=g(`mc${i}_address`),ld=g(`mc${i}_load`),qt=g(`mc${i}_qty`);
+        if (n && ph && ad) multiCustomers.push({name:n,phone:ph,address:ad,load_details:ld,quantity:qt});
+      }
+    }
+    const payload = {
+      trip_date: g('trip_date'), shipment_number: g('shipment_number'),
+      waybill_number: g('waybill_number'), invoice_number: g('invoice_number'),
+      loading_site: g('loading_site'), offloading_site: g('offloading_site'),
+      to_km: g('to_km'), standard_transit_hrs: g('standard_transit_hrs'),
+      customer_name: multiCustomers ? multiCustomers.map(c=>c.name).join(', ') : g('customer_name'),
+      customer_phone: multiCustomers ? multiCustomers.map(c=>c.phone).join(', ') : g('customer_phone'),
+      delivery_address: g('delivery_address'),
+      load_description: g('load_description'),
+      plant_arrival: g('plant_arrival'), plant_departure: g('plant_departure'),
+      depot_arrival: g('depot_arrival'), depot_departure: g('depot_departure'),
+      return_plant_arrival: g('return_plant_arrival'),
+      rate: g('rate'), pallet_size: g('pallet_size'),
+      outward_value: g('outward_value'), return_value: g('return_value'),
+      total_diesel: g('total_diesel'), bit_allowance: g('bit_allowance'),
+      area: g('area'), availability_code: g('availability_code')||'01',
+      notes: g('notes'),
+      multi_customers: multiCustomers ? JSON.stringify(multiCustomers) : null,
+    };
+    if (!payload.waybill_number && !payload.customer_name) { fail++; continue; }
+    try { await api('POST','/api/trips', payload); ok++; }
+    catch(e) { fail++; }
+  }
+  closeModal();
+  showToast(`${ok} trip(s) uploaded${fail?', '+fail+' skipped':''}`, ok?'success':'error');
+  clearCache(); navigate('trips');
+}
+
 function toggleVehicleGroup() {
   const vtype = el('nv-vtype')?.value;
   const hrow = el('nv-haulage-row');
@@ -2393,7 +2676,7 @@ function downloadPaymentTemplate() {
   showToast('Template downloaded — fill and re-upload', 'success');
 }
 
-function attachPaymentTemplate() {
+function attachPaymentTemplate() { showUploadPaymentCSV(); }function attachPaymentTemplate() {
   const isAccounts = ['accounts','super_admin','real_admin','admin'].includes(user?.role);
   if (!isAccounts) { alert('Only Accounts department can upload payment templates.'); return; }
   const input = document.createElement('input');
@@ -3040,6 +3323,7 @@ async function pgVehicles() {
                 <div style="display:flex;gap:4px">
                   ${svcLevel !== 'ok' ? `<button class="btn btn-success btn-sm" style="padding:3px 8px;font-size:10px;background:rgba(34,197,94,.15);color:#22c55e;border-color:rgba(34,197,94,.3)" onclick="showConfirmService(${v.id})" title="Log service"><i class="ti ti-tool"></i> Service</button>` : ''}
                   <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 7px" onclick="showVehicleDetail(${v.id})" title="View details"><i class="ti ti-info-circle"></i></button>
+                  ${['super_admin','real_admin','admin'].includes(user?.role) ? `<button class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 6px" onclick="event.stopPropagation();deleteVehicleSA(${v.id},'${(v.plate_number||'').replace(/'/g,'')}')" title="Delete — Super Admin only"><i class="ti ti-trash"></i></button>` : ''}
                 </div>
               </td>
             </tr>`;
@@ -3388,6 +3672,10 @@ async function pgDrivers() {
           <div class="list-sub">${d.phone||'—'} · ${d.depot}</div>
           <div class="list-sub">${d.bank_name||''} ${d.account_number?'· '+d.account_number:''}</div>
           ${urgent ? `<div style="margin-top:5px"><span class="badge badge-${days<=0?'declined':'pending'} ${days<=7?'blink':''}">${days<=0?'License EXPIRED':'License expires in '+days+'d'}</span></div>` : ''}
+        </div>
+        <div class="list-meta" style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+          <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px" onclick="showDriverDetail(${d.id})" title="View details"><i class="ti ti-eye"></i></button>
+          ${['super_admin','real_admin','admin'].includes(user?.role) ? `<button class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 6px" onclick="event.stopPropagation();deleteDriverSA(${d.id},'${(d.full_name||d.name||'').replace(/'/g,'')}')" title="Delete — Super Admin only"><i class="ti ti-trash"></i></button>` : ''}
         </div>
       </div>`;
     }).join('') || '<div class="empty-state"><div class="empty-icon"><i class="ti ti-id-badge"></i></div><div class="empty-title">No drivers yet</div></div>'}
@@ -6089,7 +6377,13 @@ async function pgTrips() {
   const defaultCompId = window._filterCompany || (companies[0]?.id||'');
   window._filterCompany = null; // reset
 
-  html('topbar-btn', `<button class="topbar-action" onclick="showNewTrip()" title="Log new trip"><i class="ti ti-plus"></i></button>`);
+  html('topbar-btn', `
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-ghost btn-sm" onclick="downloadTripTemplate()" style="font-size:11px"><i class="ti ti-download"></i> Template</button>
+      <button class="btn btn-ghost btn-sm" onclick="showUploadTrips()" style="font-size:11px"><i class="ti ti-upload"></i> Upload</button>
+      <button class="topbar-action" onclick="showNewTrip()" title="Log new trip"><i class="ti ti-plus"></i></button>
+    </div>
+  `);
 
   // Company selector
   html('page-content', `
