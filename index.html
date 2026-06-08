@@ -6425,18 +6425,28 @@ async function submitNewCompany() {
 }
 
 async function manageCompanyVehicles(compId, compName) {
-  const [assigned, allVeh] = await Promise.all([
+  const [assigned, allVeh, companies] = await Promise.all([
     api('GET',`/api/companies/${compId}/vehicles`),
-    api('GET','/api/vehicles')
+    api('GET','/api/vehicles'),
+    api('GET','/api/companies'),
   ]);
   const assignedIds = assigned.map(v => v.id);
-  const unassigned = allVeh.filter(v => !assignedIds.includes(v.id));
+  // Find this company type to filter vehicles appropriately
+  const thisCompany = companies.find(c => c.id === compId);
+  const isPool = thisCompany?.type === 'pool';
+  // Filter: pool companies show pool/petrol vehicles, haulage shows haulage vehicles
+  const filtered = allVeh.filter(v => {
+    if (assignedIds.includes(v.id)) return false;
+    if (isPool) return ['pool_car','suv','staff_bus','brt'].includes(v.vehicle_type) || v.fuel_type==='Petrol';
+    return true; // haulage shows all unassigned
+  });
+  const unassigned = filtered;
 
   showModal(`${compName} — Vehicles`, `
     <div class="form-group"><label class="form-label">Add Vehicle</label>
       <select class="form-input" id="add-veh-sel">
         <option value="">— Select vehicle to add —</option>
-        ${unassigned.map(v => `<option value="${v.id}">${v.plate_number} — ${v.make||''} ${v.model||''}</option>`).join('')}
+        ${unassigned.map(v => `<option value="${v.id}">${v.plate_number} — ${v.make||''} ${v.model||''} (${v.fuel_type||''})</option>`).join('')}
       </select>
       <button class="btn btn-primary btn-sm" style="margin-top:6px;width:100%" onclick="addVehicleToCompany(${compId})">Add Vehicle</button>
     </div>
