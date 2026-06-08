@@ -2498,8 +2498,7 @@ function previewDriverCSV() {
   if (!file) { alert('Select a file first'); return; }
   const reader = new FileReader();
   reader.onload = e => {
-    const lines = e.target.result.split('
-').filter(l => !l.startsWith('//') && l.trim());
+    const lines = e.target.result.split('\n').filter(l => !l.startsWith('//') && l.trim());
     const headers = lines[0].split(',').map(h => h.trim());
     const rows = lines.slice(1).map(l => l.split(',').map(v => v.trim())).filter(r => r.some(v => v));
     window._drvHeaders = headers;
@@ -2614,8 +2613,7 @@ function previewVehicleCSV() {
   if (!file) { alert('Select a file first'); return; }
   const reader = new FileReader();
   reader.onload = e => {
-    const lines = e.target.result.split('
-').filter(l => !l.startsWith('//') && l.trim());
+    const lines = e.target.result.split('\n').filter(l => !l.startsWith('//') && l.trim());
     const headers = lines[0].split(',').map(h => h.trim());
     const rows = lines.slice(1).map(l => l.split(',').map(v => v.trim())).filter(r => r.some(v => v));
     window._vehHeaders = headers;
