@@ -1149,9 +1149,7 @@ function renderShell() {
         <div style="font-size:9.5px;color:var(--t4);text-align:center;margin-bottom:4px;font-family:'DM Mono',monospace">
           Faithgem Technologies · v14
         </div>
-        <div style="font-size:8.5px;color:rgba(201,168,76,.3);text-align:center;margin-bottom:8px;font-family:'DM Mono',monospace;letter-spacing:1px;text-transform:uppercase">
-          Powered by Propertu
-        </div>
+
         <button class="btn-signout" onclick="doLogout()">
           <i class="ti ti-logout"></i> Sign out
         </button>
@@ -2795,7 +2793,6 @@ APPROVED BY: ${req.approved_by_name||'—'}
 
 ========================================
 POWERED BY VMO — MEDESSY ENTERPRISES
-Powered by Propertu
 ========================================` : `VMO Payment Ref: ${id} — Details unavailable`;
   const blob = new Blob([content], {type:'text/plain;charset=utf-8'});
   const a = document.createElement('a');
