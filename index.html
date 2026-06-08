@@ -1399,8 +1399,12 @@ async function pgDashboard() {
 
 // ── PAYMENT REQUESTS ────────────────────────────────────────────────────────
 async function pgRequests() {
+  const isAccounts = ['accounts','super_admin','real_admin','admin'].includes(user?.role);
+  const isSA = ['super_admin','real_admin','admin'].includes(user?.role);
   html('topbar-btn', `
     <div style="display:flex;gap:6px">
+      ${isAccounts ? `<button class="btn btn-ghost btn-sm" onclick="downloadPaymentTemplate()" style="font-size:11px" title="Download template, fill and re-attach"><i class="ti ti-file-download"></i> Template</button>` : ''}
+      ${isAccounts ? `<button class="btn btn-ghost btn-sm" onclick="attachPaymentTemplate()" style="font-size:11px" title="Upload filled template"><i class="ti ti-file-upload"></i> Upload</button>` : ''}
       <button class="btn btn-ghost btn-sm" onclick="showBulkRequests()" style="font-size:11px"><i class="ti ti-files"></i> Bulk Add</button>
       <button class="topbar-action" onclick="showNewRequest()"><i class="ti ti-plus"></i></button>
     </div>`);
@@ -1418,6 +1422,10 @@ async function pgRequests() {
       <div class="stat-card stat-green"><div class="stat-label">Paid</div><div class="stat-value" style="font-size:20px">${paid.length}</div><div class="stat-sub">${fmt(paid.reduce((s,r)=>s+(+r.amount_to_pay||0),0))}</div></div>
       <div class="stat-card stat-purple"><div class="stat-label">Total Value</div><div class="stat-value" style="font-size:16px">${fmt(total)}</div></div>
     </div>
+    ${isSA ? `
+      <div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.2);border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:11.5px;color:var(--gold)">
+        <i class="ti ti-eye"></i> <strong>Super Admin view</strong> — showing all payment requests across all departments and accounts officers.
+      </div>` : ''}
     <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
       <div style="display:flex;gap:6px;overflow-x:auto">
         ${['All','pending','approved','paid','declined'].map(s=>`
@@ -2301,9 +2309,20 @@ async function submitNewTrip() {
     availability_code: el('nt-avail')?.value,
     notes: el('nt-notes')?.value,
   };
-  if (!payload.waybill_number || !payload.customer_name) {
-    alert('Waybill number and customer name are required'); return;
+  // Multi-customer mode
+  const isMulti = el('nt-multi-toggle')?.checked;
+  if (isMulti) {
+    const { customers, valid } = collectMultiCustomers();
+    if (!valid) { alert('All delivery point fields (Name, Phone, Address, Load) are compulsory.'); return; }
+    payload.is_multi_customer = true;
+    payload.multi_customers = JSON.stringify(customers);
+    payload.customer_name = customers.map(c=>c.name).join(', ');
+    payload.customer_phone = customers.map(c=>c.phone).join(', ');
+  } else {
+    payload.delivery_address = el('nt-cust-addr')?.value;
   }
+  if (!payload.waybill_number) { alert('Waybill number is required'); return; }
+  if (!isMulti && !payload.customer_name) { alert('Customer name is required'); return; }
   try {
     clearCache();
     await api('POST', '/api/trips', payload);
@@ -2335,6 +2354,139 @@ function calcKmFuel() {
 }
 
 
+
+
+function downloadPaymentTemplate() {
+  const isAccounts = ['accounts','super_admin','real_admin','admin'].includes(user?.role);
+  if (!isAccounts) { alert('Only Accounts department can download the payment template.'); return; }
+  const headers = [
+    'description','category','amount_total','amount_to_pay','payment_type',
+    'credit_terms','payee_name','bank_name','account_number','account_name',
+    'company_name','shipment_number','customer_name','waybill_number','notes','priority'
+  ];
+  const categories = 'FUEL|DRIVER ALLOWANCE|DISPATCH|ACCOMMODATION|MAINTENANCE|LUBRICANT|CAR WASH|TRACKER/TICKETS|ENGINE/CONTAINER/TYRE|OTHER OVH|PENALTY/TOWING|3PL COST';
+  const sample = [
+    'Sample fuel payment','FUEL','50000','50000','cash','','AP Station Ikeja','GTBank','0123456789','AP Petroleum Ikeja Ltd','Medessy','285029','JUNDO BROTHERS','WB-2026-001','Monthly fuel','normal',
+  ];
+  const instructions = [
+    '// VMO PAYMENT REQUEST TEMPLATE',
+    '// Instructions:',
+    '// 1. Delete this instructions block (lines starting with //)',
+    '// 2. Fill in your payment requests — one per row',
+    '// 3. category must be one of: ' + categories,
+    '// 4. payment_type: cash or credit',
+    '// 5. priority: normal | urgent | critical',
+    '// 6. Save as CSV and upload using the Upload button',
+    '// 7. All rows will be submitted as separate payment requests for approval',
+    '//',
+  ];
+  const csvLines = [
+    ...instructions,
+    headers.join(','),
+    sample.join(','),
+  ];
+  const blob = new Blob([csvLines.join('\n')], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'VMO_Payment_Template.csv';
+  a.click();
+  showToast('Template downloaded — fill and re-upload', 'success');
+}
+
+function attachPaymentTemplate() {
+  const isAccounts = ['accounts','super_admin','real_admin','admin'].includes(user?.role);
+  if (!isAccounts) { alert('Only Accounts department can upload payment templates.'); return; }
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.csv';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    const lines = text.split('\n').filter(l => l.trim() && !l.trim().startsWith('//'));
+    if (lines.length < 2) { alert('No data rows found in template.'); return; }
+    const headers = lines[0].split(',').map(h=>h.trim().replace(/"/g,''));
+    const rows = lines.slice(1).map(line => {
+      const vals = line.match(/(".*?"|[^,]+|(?<=,)(?=,)|^(?=,)|(?<=,)$)/g) || line.split(',');
+      const obj = {};
+      headers.forEach((h,i) => { obj[h] = (vals[i]||'').trim().replace(/^"|"$/g,''); });
+      return obj;
+    }).filter(r => r.description && r.amount_total);
+
+    if (!rows.length) { alert('No valid rows found. Check the template format.'); return; }
+
+    // Check for duplicates within upload vs existing
+    const existing = window._lastRequests || [];
+    const existingDescs = existing.map(r=>(r.description||'').toLowerCase());
+    const dupes = rows.filter(r => existingDescs.includes((r.description||'').toLowerCase()));
+    if (dupes.length) {
+      const ok = confirm(`${dupes.length} possible duplicate(s) found:\n${dupes.map(d=>d.description).join(', ')}\n\nContinue anyway?`);
+      if (!ok) return;
+    }
+
+    showModal('Preview & Submit — ' + rows.length + ' Requests', `
+      <div style="font-size:11px;color:var(--text3);margin-bottom:10px">${rows.length} payment requests loaded from template. Review and confirm submission.</div>
+      <div style="overflow-x:auto;max-height:50vh;overflow-y:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+          <thead><tr style="background:var(--bg3)">
+            ${['Description','Category','Amount','Payee','Bank','Acct No.','Priority'].map(h=>
+              `<th style="padding:6px 8px;text-align:left;color:var(--text3);font-size:10px;border-bottom:1px solid var(--border)">${h}</th>`
+            ).join('')}
+          </tr></thead>
+          <tbody>
+            ${rows.map((r,i)=>`<tr style="border-bottom:1px solid var(--border);background:${i%2?'var(--bg3)':''}">
+              <td style="padding:5px 8px;font-size:11px">${sanitise(r.description||'—')}</td>
+              <td style="padding:5px 8px;font-size:10px;color:var(--text3)">${sanitise(r.category||'—')}</td>
+              <td style="padding:5px 8px;font-weight:700">${r.amount_to_pay?'₦'+Number(r.amount_to_pay).toLocaleString():'—'}</td>
+              <td style="padding:5px 8px;font-size:11px">${sanitise(r.payee_name||'—')}</td>
+              <td style="padding:5px 8px;font-size:10px">${sanitise(r.bank_name||'—')}</td>
+              <td style="padding:5px 8px;font-family:monospace;font-size:10px">${sanitise(r.account_number||'—')}</td>
+              <td style="padding:5px 8px"><span class="badge ${r.priority==='critical'?'badge-declined':r.priority==='urgent'?'badge-pending':'badge-approved'}" style="font-size:9px">${r.priority||'normal'}</span></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-primary btn-block" onclick="submitTemplateRequests(window._templateRows)">Submit All ${rows.length} Requests</button>
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      </div>
+    `, 'lg');
+    window._templateRows = rows;
+  };
+  input.click();
+}
+
+async function submitTemplateRequests(rows) {
+  if (!rows?.length) return;
+  let submitted = 0, failed = 0;
+  for (const r of rows) {
+    try {
+      await api('POST', '/api/requests', {
+        description: r.description,
+        category: r.category || 'OTHER OVH',
+        amount: parseFloat(r.amount_total) || 0,
+        amount_to_pay: parseFloat(r.amount_to_pay) || parseFloat(r.amount_total) || 0,
+        payment_type: r.payment_type || 'cash',
+        credit_terms: r.credit_terms || '',
+        payee_name: r.payee_name || '',
+        bank_name: r.bank_name || '',
+        account_number: r.account_number || '',
+        account_name: r.account_name || '',
+        company_name: r.company_name || '',
+        shipment_number: r.shipment_number || '',
+        customer_name: r.customer_name || '',
+        waybill_number: r.waybill_number || '',
+        notes: r.notes || '',
+        priority: r.priority || 'normal',
+      });
+      submitted++;
+    } catch(e) { failed++; }
+  }
+  clearCache();
+  closeModal();
+  showToast(`${submitted} requests submitted${failed?', '+failed+' failed':''}`, submitted>0?'success':'error');
+  navigate('requests');
+}
 
 function downloadPaymentProof(id) {
   const req = window._lastRequests ? window._lastRequests.find(r=>r.id===id) : null;
@@ -6483,12 +6635,40 @@ async function showNewTrip() {
         <input class="form-input" id="nt-transit" type="number" placeholder="e.g. 2.5"></div>
     </div>
 
-    <!-- Customer -->
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">⑬ Customer Name *</label>
-        <input class="form-input" id="nt-cust" placeholder="e.g. JUNDO BROTHERS"></div>
-      <div class="form-group"><label class="form-label">⑭ Customer Phone</label>
-        <input class="form-input" id="nt-phone" type="tel" placeholder="08012345678"></div>
+    <!-- Customer — single by default, multi-customer toggle -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 6px">
+      <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">👤 Customer Delivery</div>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text2)">
+        <input type="checkbox" id="nt-multi-toggle" onchange="toggleMultiCustomer()" style="accent-color:var(--gold)">
+        Multiple delivery points
+      </label>
+    </div>
+
+    <!-- Single customer (default) -->
+    <div id="nt-single-cust">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Customer Name *</label>
+          <input class="form-input" id="nt-cust" placeholder="e.g. JUNDO BROTHERS"></div>
+        <div class="form-group"><label class="form-label">Customer Phone</label>
+          <input class="form-input" id="nt-phone" type="tel" placeholder="08012345678"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Delivery Address</label>
+        <input class="form-input" id="nt-cust-addr" placeholder="Full delivery address"></div>
+    </div>
+
+    <!-- Multi-customer block (hidden until toggled) -->
+    <div id="nt-multi-cust" style="display:none">
+      <div style="background:rgba(201,168,76,.05);border:1px solid rgba(201,168,76,.2);border-radius:10px;padding:12px;margin-bottom:8px">
+        <div style="font-size:11px;color:var(--amber);margin-bottom:10px">
+          <i class="ti ti-info-circle"></i> All fields below are compulsory for multi-point deliveries.
+        </div>
+        <div id="nt-cust-rows">
+          <!-- rows injected by addCustomerRow() -->
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="addCustomerRow()" style="font-size:11px;margin-top:6px">
+          <i class="ti ti-plus"></i> Add Delivery Point
+        </button>
+      </div>
     </div>
 
     <!-- Shipment + Load details -->
@@ -6565,6 +6745,71 @@ async function showNewTrip() {
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
     </div>
   `, 'lg');
+}
+
+
+function toggleMultiCustomer() {
+  const on = el('nt-multi-toggle')?.checked;
+  const single = el('nt-single-cust');
+  const multi  = el('nt-multi-cust');
+  if (!single || !multi) return;
+  single.style.display = on ? 'none' : '';
+  multi.style.display  = on ? '' : 'none';
+  if (on && el('nt-cust-rows') && !el('nt-cust-rows').children.length) {
+    addCustomerRow(); addCustomerRow(); // start with 2 rows
+  }
+}
+
+let _custRowCount = 0;
+function addCustomerRow() {
+  const container = el('nt-cust-rows');
+  if (!container) return;
+  const idx = _custRowCount++;
+  const row = document.createElement('div');
+  row.id = `cust-row-${idx}`;
+  row.style.cssText = 'background:var(--bg3);border-radius:8px;padding:10px;margin-bottom:8px;border:1px solid var(--border)';
+  row.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <span style="font-size:10px;font-weight:700;color:var(--gold);text-transform:uppercase">Delivery Point ${idx+1}</span>
+      <button onclick="removeCustRow(${idx})" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:13px" title="Remove">×</button>
+    </div>
+    <div class="form-row" style="gap:8px">
+      <div class="form-group" style="flex:1"><label class="form-label">Customer Name *</label>
+        <input class="form-input" id="mc-name-${idx}" placeholder="Company / person name" required></div>
+      <div class="form-group" style="flex:1"><label class="form-label">Phone *</label>
+        <input class="form-input" id="mc-phone-${idx}" type="tel" placeholder="08012345678" required></div>
+    </div>
+    <div class="form-group"><label class="form-label">Delivery Address *</label>
+      <input class="form-input" id="mc-addr-${idx}" placeholder="Full delivery address" required></div>
+    <div class="form-row" style="gap:8px">
+      <div class="form-group" style="flex:1"><label class="form-label">Load / Product *</label>
+        <input class="form-input" id="mc-load-${idx}" placeholder="e.g. Corn Malt 5 tons"></div>
+      <div class="form-group" style="flex:1"><label class="form-label">Qty / Volume</label>
+        <input class="form-input" id="mc-qty-${idx}" placeholder="e.g. 5 tons"></div>
+    </div>`;
+  container.appendChild(row);
+}
+
+function removeCustRow(idx) {
+  const row = el(`cust-row-${idx}`);
+  if (row) row.remove();
+}
+
+function collectMultiCustomers() {
+  const rows = el('nt-cust-rows')?.querySelectorAll('[id^="cust-row-"]') || [];
+  const customers = [];
+  let valid = true;
+  rows.forEach((row, i) => {
+    const idxStr = row.id.replace('cust-row-','');
+    const name  = el(`mc-name-${idxStr}`)?.value?.trim();
+    const phone = el(`mc-phone-${idxStr}`)?.value?.trim();
+    const addr  = el(`mc-addr-${idxStr}`)?.value?.trim();
+    const load  = el(`mc-load-${idxStr}`)?.value?.trim();
+    const qty   = el(`mc-qty-${idxStr}`)?.value?.trim();
+    if (!name || !phone || !addr || !load) { valid = false; }
+    customers.push({ name, phone, address: addr, load_details: load, quantity: qty });
+  });
+  return { customers, valid };
 }
 
 function calcWaitTimes() {
@@ -8052,7 +8297,26 @@ function showEditUserFull(id) {
     <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn btn-primary btn-block" onclick="submitEditUserFull(${id})"><i class="ti ti-check"></i> Save All Changes</button>
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      ${['super_admin','real_admin'].includes(user?.role) ? `
+        <button class="btn btn-danger btn-sm" onclick="deleteUserSA(${id})"><i class="ti ti-user-off"></i> Delete User</button>` : ''}
     </div>`);
+}
+
+async function deleteUserSA(id) {
+  if (!['super_admin','real_admin'].includes(user?.role)) { alert('Only Super Admin can delete users.'); return; }
+  const allUsers = window._allUsersList || [];
+  const target = allUsers.find(u => u.id === id);
+  if (['super_admin','real_admin'].includes(target?.role)) { alert('Super Admin accounts cannot be deleted.'); return; }
+  if (!confirm(`Delete user "${target?.full_name || id}"?\nThis permanently removes their account and cannot be undone.`)) return;
+  const reason = prompt('Enter reason for deletion (required for audit trail):');
+  if (!reason?.trim()) { alert('A reason is required.'); return; }
+  try {
+    clearCache();
+    await api('DELETE', `/api/users/${id}`, { reason });
+    closeModal();
+    showToast('User account deleted', 'success');
+    navigate('users');
+  } catch(e) { alert(e.message || 'Delete failed'); }
 }
 
 async function submitEditUserFull(id) {
