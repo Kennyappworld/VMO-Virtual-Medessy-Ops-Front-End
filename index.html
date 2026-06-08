@@ -1612,12 +1612,33 @@ async function showNewRequest() {
           <option value="">— Select vendor —</option>
         </select></div>
     </div>
-    <div class="form-group"><label class="form-label">Payee Name</label><input class="form-input" id="nr-payee" placeholder="Company or person being paid"></div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Bank</label><input class="form-input" id="nr-bank" placeholder="GTBank"></div>
-      <div class="form-group"><label class="form-label">Account No.</label><input class="form-input" id="nr-acct" placeholder="0123456789"></div>
+    <div class="form-group">
+      <label class="form-label">Payee Name</label>
+      <input class="form-input" id="nr-payee" placeholder="Company or person being paid">
     </div>
-    <div style="display:flex;gap:8px;margin-top:4px">
+
+    <!-- Account details block — locked when vendor selected -->
+    <div id="nr-acct-block" style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;margin-top:4px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">
+          🏦 Payment Account Details
+        </div>
+        <div id="nr-acct-lock-badge" style="display:none;font-size:10px;color:var(--amber);display:flex;align-items:center;gap:4px">
+          <i class="ti ti-lock" style="font-size:11px"></i>
+          <span>Auto-filled from vendor — Super Admin can edit</span>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Bank Name</label>
+          <input class="form-input" id="nr-bank" placeholder="e.g. GTBank"></div>
+        <div class="form-group"><label class="form-label">Account Number</label>
+          <input class="form-input" id="nr-acct" placeholder="0123456789"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Account Name</label>
+        <input class="form-input" id="nr-aname" placeholder="As registered with bank"></div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:12px">
       <button class="btn btn-primary btn-block" onclick="submitRequest()">Submit Request</button>
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
     </div>`);
@@ -1804,6 +1825,7 @@ async function submitRequest() {
       payee_name: el('nr-payee').value,
       bank_name: el('nr-bank').value,
       account_number: el('nr-acct').value,
+      account_name: el('nr-aname')?.value||'',
       company_id: el('nr-company')?.value || null,
       shipment_number: el('nr-waybill')?.value || null,
       customer_name: el('nr-custname')?.value || null,
@@ -2363,25 +2385,32 @@ async function togglePayeeType() {
   const t = el('nr-payee-type')?.value;
   const vrow = el('nr-vendor-row');
   if (!vrow) return;
+
   if (t === 'vendor') {
     vrow.style.display = '';
+    // Load vendor list if not cached
     if (!window._vendorOpts) {
       let vendors = [];
-  try { vendors = await api('GET','/api/vendors'); } catch(e) {
-    // Fallback: use local store if backend endpoint not yet deployed
-    vendors = JSON.parse(localStorage.getItem('vmo_vendors_local')||'[]');
-  }
+      try { vendors = await api('GET','/api/vendors'); } catch(e) {
+        vendors = JSON.parse(localStorage.getItem('vmo_vendors_local')||'[]');
+      }
       window._vendorOpts = vendors;
       const sel = el('nr-vendor-sel');
       if (sel) sel.innerHTML = '<option value="">— Select vendor —</option>' +
-        vendors.map(v=>`<option value="${v.id}" data-name="${v.company_name||v.name||''}" data-bank="${v.bank_name||''}" data-acct="${v.account_number||''}" data-aname="${v.account_name||''}">${v.company_name||v.name}</option>`).join('');
+        vendors.map(v=>`<option value="${v.id}"
+          data-name="${(v.company_name||v.name||'').replace(/"/g,'&quot;')}"
+          data-bank="${(v.bank_name||'').replace(/"/g,'&quot;')}"
+          data-acct="${(v.account_number||'').replace(/"/g,'&quot;')}"
+          data-aname="${(v.account_name||'').replace(/"/g,'&quot;')}"
+          >${v.company_name||v.name}</option>`).join('');
     }
   } else {
+    // Manual mode — unlock all fields, clear values, hide lock badge
     vrow.style.display = 'none';
-    // Clear auto-filled fields
+    unlockPaymentFields();
     if (el('nr-payee')) el('nr-payee').value = '';
-    if (el('nr-bank')) el('nr-bank').value = '';
-    if (el('nr-acct')) el('nr-acct').value = '';
+    if (el('nr-bank'))  el('nr-bank').value  = '';
+    if (el('nr-acct'))  el('nr-acct').value  = '';
     if (el('nr-aname')) el('nr-aname').value = '';
   }
 }
@@ -2390,11 +2419,60 @@ function autoFillVendorPayment() {
   const sel = el('nr-vendor-sel');
   if (!sel) return;
   const opt = sel.options[sel.selectedIndex];
-  if (!opt || !opt.value) return;
-  if (el('nr-payee')) el('nr-payee').value = opt.dataset.name || '';
-  if (el('nr-bank')) el('nr-bank').value = opt.dataset.bank || '';
-  if (el('nr-acct')) el('nr-acct').value = opt.dataset.acct || '';
-  if (el('nr-aname')) el('nr-aname').value = opt.dataset.aname || '';
+  if (!opt || !opt.value) { unlockPaymentFields(); return; }
+
+  // Pull pre-registered account details from vendor record
+  const name  = opt.dataset.name  || '';
+  const bank  = opt.dataset.bank  || '';
+  const acct  = opt.dataset.acct  || '';
+  const aname = opt.dataset.aname || '';
+
+  // Fill the fields
+  if (el('nr-payee')) el('nr-payee').value = name;
+  if (el('nr-bank'))  el('nr-bank').value  = bank;
+  if (el('nr-acct'))  el('nr-acct').value  = acct;
+  if (el('nr-aname')) el('nr-aname').value = aname;
+
+  // Lock fields — Super Admin can still edit, others cannot
+  lockPaymentFields();
+}
+
+function lockPaymentFields() {
+  const isSuperAdmin = ['super_admin','real_admin','admin'].includes(user?.role);
+  const badge = el('nr-acct-lock-badge');
+  if (badge) badge.style.display = 'flex';
+
+  ['nr-bank','nr-acct','nr-aname','nr-payee'].forEach(id => {
+    const f = el(id);
+    if (!f) return;
+    if (isSuperAdmin) {
+      // Super admin sees fields editable but visually marked
+      f.style.background = 'rgba(201,168,76,.06)';
+      f.style.borderColor = 'rgba(201,168,76,.3)';
+      f.removeAttribute('readonly');
+      f.title = 'Pre-filled from vendor — you can override as Super Admin';
+    } else {
+      // Everyone else: read-only
+      f.setAttribute('readonly', 'readonly');
+      f.style.background = 'var(--bg3)';
+      f.style.opacity = '0.85';
+      f.title = 'Auto-filled from registered vendor — contact Super Admin to change';
+    }
+  });
+}
+
+function unlockPaymentFields() {
+  const badge = el('nr-acct-lock-badge');
+  if (badge) badge.style.display = 'none';
+  ['nr-bank','nr-acct','nr-aname','nr-payee'].forEach(id => {
+    const f = el(id);
+    if (!f) return;
+    f.removeAttribute('readonly');
+    f.style.background = '';
+    f.style.borderColor = '';
+    f.style.opacity = '';
+    f.title = '';
+  });
 }
 
 async function loadLastOdometer() {
@@ -6001,8 +6079,8 @@ function renderVendorTable(vendors) {
     <td style="font-size:12px">${sanitise(v.credit_terms||'—')}</td>
     <td><span class="badge ${v.status==='active'?'badge-approved':'badge-declined'}" style="font-size:10px">${v.status||'active'}</span></td>
     <td>
-      <button class="btn btn-ghost btn-sm" onclick="showVendorDetail(${v.id})"><i class="ti ti-eye"></i></button>
-      <button class="btn btn-ghost btn-sm" onclick="editVendor(${v.id})"><i class="ti ti-edit"></i></button>
+      <button class="btn btn-ghost btn-sm" onclick="showVendorDetail(${v.id})" title="View details"><i class="ti ti-eye"></i></button>
+      ${['super_admin','real_admin','admin'].includes(user?.role) ? `<button class="btn btn-ghost btn-sm" onclick="editVendor(${v.id})" title="Edit vendor (Super Admin only)"><i class="ti ti-edit"></i></button>` : ''}
     </td>
   </tr>`).join('')}
   </tbody></table>`;
@@ -6134,7 +6212,12 @@ async function showVendorDetail(id) {
 async function editVendor(id) {
   const v = (window._vendorsList||[]).find(x=>x.id===id);
   if (!v) return;
+  const canEdit = ['super_admin','real_admin','admin'].includes(user?.role);
+  if (!canEdit) { showToast('Only Super Admins can edit vendor details','error'); return; }
   showModal('Edit Vendor', `
+    <div style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.2);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:11.5px;color:var(--gold)">
+      <i class="ti ti-lock" style="margin-right:5px"></i> <strong>Super Admin access.</strong> Changes to bank details here will auto-apply to all future payment requests using this vendor.
+    </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Company Name</label>
         <input class="form-input" id="ev-cname" value="${sanitise(v.company_name||'')}"></div>
