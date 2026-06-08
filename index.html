@@ -971,6 +971,8 @@ const ALL_PAGES = [
   { id:'inventory',    icon:'ti-package',         label:'Store',          section:'Operations' },
   { id:'companies',    icon:'ti-building-factory',label:'Companies/Units',section:'Operations' },
   { id:'trips',        icon:'ti-map-route',       label:'Trip Log',       section:'Operations' },
+  { id:'vendors',      icon:'ti-building-store',  label:'Vendors',         section:'Operations' },
+  { id:'debit',        icon:'ti-receipt-2',       label:'Debit Sheet',     section:'Operations' },
   { id:'chat',         icon:'ti-message-circle',  label:'Chat',           section:'Team' },
   { id:'meetings',     icon:'ti-video',           label:'Meetings',       section:'Team' },
   { id:'users',        icon:'ti-users',           label:'Users',          section:'Admin' },
@@ -984,10 +986,10 @@ const ROLE_PAGES = {
   super_admin:        ALL_PAGES.map(p => p.id),
   admin:              ALL_PAGES.map(p => p.id),
   hr:                 ['dashboard','issues','drivers','vehicles','compliance','reservations','chat','meetings'],
-  accounts:           ['dashboard','issues','requests','receivables','imprest','clients','fuel','chat','audit','balance','meetings'],
+  accounts:           ['dashboard','issues','requests','receivables','imprest','clients','fuel','chat','audit','balance','meetings','vendors','debit'],
   compliance:         ['dashboard','issues','vehicles','drivers','compliance','chat','maintenance'],
-  operations_manager: ['dashboard','issues','requests','fuel','vehicles','drivers','reservations','inventory','compliance','maintenance','chat','companies','trips','availability','meetings'],
-  haulage_manager:    ['dashboard','issues','requests','fuel','vehicles','drivers','compliance','companies','trips','inventory','chat','availability','maintenance','meetings'],
+  operations_manager: ['dashboard','issues','requests','fuel','vehicles','drivers','reservations','inventory','compliance','maintenance','chat','companies','trips','availability','meetings','vendors','debit'],
+  haulage_manager:    ['dashboard','issues','requests','fuel','vehicles','drivers','compliance','companies','trips','inventory','chat','availability','maintenance','meetings','vendors','debit'],
   pool_manager:       ['dashboard','issues','requests','fuel','vehicles','drivers','reservations','compliance','companies','chat','availability','meetings'],
   logistics_supervisor:['dashboard','issues','availability','chat'],
   driver:             ['dashboard','issues','fuel','reservations','chat'],
@@ -1144,8 +1146,11 @@ function renderShell() {
         `).join('')}
       </div>
       <div class="sidebar-footer">
-        <div style="font-size:9.5px;color:var(--t4);text-align:center;margin-bottom:8px;font-family:'DM Mono',monospace">
-          Faithgem Technologies
+        <div style="font-size:9.5px;color:var(--t4);text-align:center;margin-bottom:4px;font-family:'DM Mono',monospace">
+          Faithgem Technologies · v14
+        </div>
+        <div style="font-size:8.5px;color:rgba(201,168,76,.3);text-align:center;margin-bottom:8px;font-family:'DM Mono',monospace;letter-spacing:1px;text-transform:uppercase">
+          Powered by Propertu
         </div>
         <button class="btn-signout" onclick="doLogout()">
           <i class="ti ti-logout"></i> Sign out
@@ -1241,6 +1246,8 @@ async function loadPage(p) {
     else if (p==='budget') await pgBudget();
     else if (p==='companies') await pgCompanies();
     else if (p==='trips') await pgTrips();
+    else if (p==='vendors') await pgVendors();
+    else if (p==='debit') await pgDebit();
     else if (p==='availability') await pgAvailability();
     else if (p==='maintenance') await pgMaintenance();
     else if (p==='meetings') await pgMeetings();
@@ -1398,6 +1405,7 @@ async function pgRequests() {
       <button class="topbar-action" onclick="showNewRequest()"><i class="ti ti-plus"></i></button>
     </div>`);
   const data = await api('GET', '/api/requests');
+  window._lastRequests = data;
   const pending = data.filter(r=>r.status==='pending');
   const approved = data.filter(r=>r.status==='approved');
   const paid = data.filter(r=>r.status==='paid');
@@ -1456,6 +1464,9 @@ async function pgRequests() {
                   <button class="btn btn-danger btn-sm" onclick="declineReq(${r.id})" style="padding:3px 8px;font-size:11px">✗</button>
                 `:r.status==='approved'?`
                   <button class="btn btn-primary btn-sm" onclick="payReq(${r.id})" style="padding:3px 10px;font-size:11px">Pay</button>
+                `:r.status==='paid'?`
+                  <button class="btn btn-ghost btn-sm" onclick="downloadPaymentProof(${r.id})" style="padding:2px 7px;font-size:11px" title="Download proof"><i class="ti ti-download"></i></button>
+                  <button class="btn btn-ghost btn-sm" onclick="shareProofWhatsApp(${r.id})" style="padding:2px 7px;font-size:11px" title="Share via WhatsApp" style="color:#25D366"><i class="ti ti-brand-whatsapp"></i></button>
                 `:'<span style="color:var(--text3);font-size:10px">—</span>'}
               </td>
             </tr>`;
@@ -1589,6 +1600,17 @@ async function showNewRequest() {
         <select class="form-input" id="nr-type"><option value="cash">Cash</option><option value="credit">Credit</option></select>
       </div>
       <div class="form-group"><label class="form-label">Credit Terms</label><input class="form-input" id="nr-terms" placeholder="e.g. 30 days"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Payee Type</label>
+        <select class="form-input" id="nr-payee-type" onchange="togglePayeeType()">
+          <option value="manual">Other (Manual Entry)</option>
+          <option value="vendor">Registered Vendor</option>
+        </select></div>
+      <div class="form-group" id="nr-vendor-row" style="display:none"><label class="form-label">Select Vendor</label>
+        <select class="form-input" id="nr-vendor-sel" onchange="autoFillVendorPayment()">
+          <option value="">— Select vendor —</option>
+        </select></div>
     </div>
     <div class="form-group"><label class="form-label">Payee Name</label><input class="form-input" id="nr-payee" placeholder="Company or person being paid"></div>
     <div class="form-row">
@@ -2002,23 +2024,273 @@ async function declineFuel(id) {
   const reason = prompt('Decline reason:'); if (!reason) return;
   try { clearCache(); await api('PATCH', `/api/fuel/${id}/decline`, { reason }); navigate('fuel'); } catch(e) { alert(e.message); }
 }
-function showNewFuel() {
-  showModal('New Fuel Request', `
+async function showNewFuel(preShipment) {
+  // Load petrol station vendors + drivers + vehicles for smart dropdowns
+  const [vendors, drivers, vehicles] = await Promise.all([
+    api('GET','/api/vendors?type=petrol_station').catch(()=>[]),
+    api('GET','/api/drivers').catch(()=>[]),
+    api('GET','/api/vehicles').catch(()=>[]),
+  ]);
+
+  const isSupervisor = ['super_admin','admin','real_admin','operations_manager','haulage_manager','pool_manager'].includes(user?.role);
+  const isDriver = user?.role === 'driver';
+
+  showModal('New Fuel / Dispatch Request', `
     <div class="form-row">
+      <div class="form-group"><label class="form-label">Request Type</label>
+        <select class="form-input" id="nf-rtype" onchange="toggleFuelDispatch()">
+          <option value="fuel">Fuel Only</option>
+          <option value="dispatch">Dispatch Only</option>
+          <option value="both">Fuel + Dispatch</option>
+        </select></div>
       <div class="form-group"><label class="form-label">Fuel Type</label>
-        <select class="form-input" id="nf-type"><option>Petrol</option><option>Diesel</option></select></div>
-      <div class="form-group"><label class="form-label">Quantity (L)</label><input class="form-input" id="nf-qty" type="number" placeholder="50"></div>
+        <select class="form-input" id="nf-type"><option>Diesel</option><option>Petrol</option><option>CNG</option><option>LNG</option></select></div>
     </div>
-    <div class="form-group"><label class="form-label">Station Name</label><input class="form-input" id="nf-stn" placeholder="AP Lekki"></div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Amount (₦)</label><input class="form-input" id="nf-amt" type="number" placeholder="0.00"></div>
-      <div class="form-group"><label class="form-label">Account No.</label><input class="form-input" id="nf-acct" placeholder="(if non-partner)"></div>
+      <div class="form-group"><label class="form-label">Shipment / Waybill No.</label>
+        <input class="form-input" id="nf-ship" placeholder="e.g. 285029" value="${preShipment||''}"></div>
+      <div class="form-group"><label class="form-label">Vehicle</label>
+        <select class="form-input" id="nf-veh" onchange="autoFillFuelFromVehicle()">
+          <option value="">— Select vehicle —</option>
+          ${vehicles.map(v=>`<option value="${v.id}" data-plate="${v.plate_number||''}" data-cat="${v.vehicle_category||''}" data-ftype="${v.fuel_type||''}">${v.plate_number||v.id}</option>`).join('')}
+        </select></div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:4px">
-      <button class="btn btn-primary btn-block" onclick="submitFuel()">Submit</button>
+    ${isSupervisor ? `<div class="form-row">
+      <div class="form-group"><label class="form-label">Driver (on behalf of)</label>
+        <select class="form-input" id="nf-driver" onchange="autoFillDriverDetails()">
+          <option value="">— Select driver —</option>
+          ${drivers.map(d=>`<option value="${d.id}" data-name="${d.full_name||d.name||''}" data-bank="${d.bank_name||''}" data-acct="${d.account_number||''}" data-aname="${d.account_name||''}">${d.full_name||d.name}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Driver confirms name</label>
+        <input class="form-input" id="nf-dname" placeholder="Driver full name" value="${user?.full_name||user?.name||''}"></div>
+    </div>` : `<input type="hidden" id="nf-driver" value="${user?.driver_id||''}">
+    <div class="form-group"><label class="form-label">Confirm Your Name</label>
+      <input class="form-input" id="nf-dname" value="${user?.full_name||user?.name||''}"></div>`}
+
+    <!-- Fuel section -->
+    <div id="nf-fuel-section">
+      <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px">⛽ Fuel Details</div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Quantity (L)</label>
+          <input class="form-input" id="nf-qty" type="number" placeholder="0" oninput="calcFuelAmt()"></div>
+        <div class="form-group"><label class="form-label">Entitled (auto)</label>
+          <input class="form-input" id="nf-entitled" placeholder="Based on destination" readonly style="background:var(--bg3)"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Petrol Station Vendor</label>
+          <select class="form-input" id="nf-stn" onchange="autoFillStationPrice()">
+            <option value="">— Select station —</option>
+            ${vendors.map(v=>`<option value="${v.id}" data-price="${v.price_per_litre||0}" data-name="${v.company_name||v.name||''}">${v.company_name||v.name}</option>`).join('')}
+            <option value="__manual">Other / Manual Entry</option>
+          </select></div>
+        <div class="form-group"><label class="form-label">Price/L (₦)</label>
+          <input class="form-input" id="nf-price" type="number" placeholder="0" oninput="calcFuelAmt()"></div>
+      </div>
+      <div class="form-group" id="nf-manual-station" style="display:none">
+        <label class="form-label">Station Name (manual)</label>
+        <input class="form-input" id="nf-stn-manual" placeholder="Enter station name"></div>
+      <div class="form-group"><label class="form-label">Fuel Amount (₦)</label>
+        <input class="form-input" id="nf-amt" type="number" placeholder="Auto-calculated" readonly style="background:var(--bg3)"></div>
+    </div>
+
+    <!-- Dispatch section -->
+    <div id="nf-dispatch-section" style="display:none">
+      <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px">🚛 Dispatch Allowance</div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">From</label>
+          <input class="form-input" id="nf-from" placeholder="e.g. Lagos" oninput="lookupDispatchRoute()"></div>
+        <div class="form-group"><label class="form-label">Destination</label>
+          <input class="form-input" id="nf-dest" placeholder="e.g. Ibadan" oninput="lookupDispatchRoute()"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Distance (km)</label>
+          <input class="form-input" id="nf-km" type="number" placeholder="Auto from route" oninput="calcDispatch()"></div>
+        <div class="form-group"><label class="form-label">Dispatch Amount (₦)</label>
+          <input class="form-input" id="nf-dispatch-amt" type="number" placeholder="Pre-set or manual"></div>
+      </div>
+    </div>
+
+    <!-- Payment details (auto-filled from driver) -->
+    <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px">🏦 Payment Details</div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Bank</label>
+        <input class="form-input" id="nf-bank" placeholder="Driver's bank" readonly style="background:var(--bg3)"></div>
+      <div class="form-group"><label class="form-label">Account Number</label>
+        <input class="form-input" id="nf-acct" placeholder="Auto-filled"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Account Name</label>
+      <input class="form-input" id="nf-aname" placeholder="Auto-filled" readonly style="background:var(--bg3)"></div>
+
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="submitFuelV2()">Submit for Approval</button>
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-    </div>`);
+    </div>
+  `);
 }
+
+
+function toggleVehicleGroup() {
+  const vtype = el('nv-vtype')?.value;
+  const hrow = el('nv-haulage-row');
+  if (!hrow) return;
+  if (vtype === 'haulage') {
+    hrow.style.display = '';
+    // Load companies for attachment
+    api('GET','/api/companies').then(cos => {
+      const sel = el('nv-company');
+      if (sel) sel.innerHTML = '<option value="">— Select company —</option>' +
+        cos.map(c=>`<option value="${c.id}">${sanitise(c.name)}</option>`).join('');
+    }).catch(()=>{});
+  } else {
+    hrow.style.display = 'none';
+  }
+}
+
+function toggleFuelDispatch() {
+  const t = el('nf-rtype')?.value;
+  const fs = el('nf-fuel-section');
+  const ds = el('nf-dispatch-section');
+  if (!fs||!ds) return;
+  fs.style.display = (t==='fuel'||t==='both') ? '' : 'none';
+  ds.style.display = (t==='dispatch'||t==='both') ? '' : 'none';
+}
+
+function autoFillDriverDetails() {
+  const sel = el('nf-driver');
+  if (!sel) return;
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt) return;
+  if (el('nf-bank')) el('nf-bank').value = opt.dataset.bank||'';
+  if (el('nf-acct')) el('nf-acct').value = opt.dataset.acct||'';
+  if (el('nf-aname')) el('nf-aname').value = opt.dataset.aname||'';
+  if (el('nf-dname') && opt.dataset.name) el('nf-dname').value = opt.dataset.name;
+}
+
+function autoFillFuelFromVehicle() {
+  const sel = el('nf-veh');
+  if (!sel) return;
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt) return;
+  const ft = opt.dataset.ftype;
+  if (ft && el('nf-type')) {
+    const typeSelect = el('nf-type');
+    for (let i=0;i<typeSelect.options.length;i++) {
+      if (typeSelect.options[i].value.toLowerCase()===ft.toLowerCase()) {
+        typeSelect.selectedIndex=i; break;
+      }
+    }
+  }
+}
+
+function autoFillStationPrice() {
+  const sel = el('nf-stn');
+  if (!sel) return;
+  const opt = sel.options[sel.selectedIndex];
+  const manual = el('nf-manual-station');
+  if (opt?.value==='__manual') {
+    if (manual) manual.style.display='';
+    return;
+  }
+  if (manual) manual.style.display='none';
+  const price = opt?.dataset.price;
+  if (price && el('nf-price')) { el('nf-price').value = price; calcFuelAmt(); }
+}
+
+function calcFuelAmt() {
+  const qty = parseFloat(el('nf-qty')?.value||0);
+  const price = parseFloat(el('nf-price')?.value||0);
+  if (el('nf-amt') && qty && price) el('nf-amt').value = (qty*price).toFixed(0);
+}
+
+function lookupDispatchRoute() {
+  const from = el('nf-from')?.value?.trim().toLowerCase();
+  const dest = el('nf-dest')?.value?.trim().toLowerCase();
+  // Pre-set routes lookup (admin-configurable, hardcoded defaults here)
+  const routes = window._dispatchRoutes || [];
+  const match = routes.find(r =>
+    (r.from.toLowerCase()===from && r.to.toLowerCase()===dest) ||
+    (r.from.toLowerCase()===dest && r.to.toLowerCase()===from)
+  );
+  if (match) {
+    if (el('nf-km')) el('nf-km').value = match.distance_km;
+    if (el('nf-dispatch-amt')) el('nf-dispatch-amt').value = match.dispatch_amount||'';
+    if (el('nf-entitled')) el('nf-entitled').value = match.fuel_litres ? match.fuel_litres+'L' : '';
+  }
+}
+
+async function submitFuelV2() {
+  const rtype = el('nf-rtype')?.value || 'fuel';
+  const payload = {
+    request_type: rtype,
+    fuel_type: el('nf-type')?.value,
+    shipment_number: el('nf-ship')?.value,
+    vehicle_id: el('nf-veh')?.value,
+    driver_id: el('nf-driver')?.value,
+    driver_name_confirm: el('nf-dname')?.value,
+    quantity: el('nf-qty')?.value,
+    station_vendor_id: el('nf-stn')?.value && el('nf-stn').value!=='__manual' ? el('nf-stn').value : null,
+    station_name_manual: el('nf-stn-manual')?.value,
+    price_per_litre: el('nf-price')?.value,
+    amount: el('nf-amt')?.value,
+    from_location: el('nf-from')?.value,
+    destination: el('nf-dest')?.value,
+    distance_km: el('nf-km')?.value,
+    dispatch_amount: el('nf-dispatch-amt')?.value,
+    account_number: el('nf-acct')?.value,
+    bank_name: el('nf-bank')?.value,
+    account_name: el('nf-aname')?.value,
+  };
+  try {
+    clearCache();
+    await api('POST', '/api/fuel', payload);
+    closeModal();
+    showToast('Request submitted for approval','success');
+    navigate('fuel');
+  } catch(e) { alert(e.message||'Submit failed'); }
+}
+async function submitNewTrip() {
+  const payload = {
+    company_id: el('nt-co')?.value,
+    trip_date: el('nt-date')?.value,
+    waybill_number: el('nt-waybill')?.value,
+    invoice_number: el('nt-invoice')?.value,
+    vehicle_id: el('nt-veh')?.value,
+    driver_id: el('nt-drv')?.value,
+    loading_site: el('nt-load')?.value,
+    offloading_site: el('nt-offload')?.value,
+    to_km: el('nt-km')?.value,
+    standard_transit_hrs: el('nt-transit')?.value,
+    customer_name: el('nt-cust')?.value,
+    customer_phone: el('nt-phone')?.value,
+    shipment_number: el('nt-ship')?.value,
+    load_description: el('nt-load-desc')?.value,
+    plant_arrival: el('nt-plant-arr')?.value,
+    plant_departure: el('nt-plant-dep')?.value,
+    depot_arrival: el('nt-depot-arr')?.value,
+    depot_departure: el('nt-depot-dep')?.value,
+    return_plant_arrival: el('nt-return-arr')?.value,
+    rate: el('nt-rate')?.value,
+    pallet_size: el('nt-pallet')?.value,
+    outward_value: el('nt-outval')?.value,
+    return_value: el('nt-retval')?.value,
+    total_diesel: el('nt-diesel')?.value,
+    bit_allowance: el('nt-bit')?.value,
+    area: el('nt-area')?.value,
+    availability_code: el('nt-avail')?.value,
+    notes: el('nt-notes')?.value,
+  };
+  if (!payload.waybill_number || !payload.customer_name) {
+    alert('Waybill number and customer name are required'); return;
+  }
+  try {
+    clearCache();
+    await api('POST', '/api/trips', payload);
+    closeModal();
+    showToast('Trip logged successfully','success');
+    navigate('trips');
+  } catch(e) { alert(e.message||'Failed to save trip'); }
+}
+
 function calcKmFuel() {
   const prev = parseFloat(el('nf-odo-prev')?.value || 0);
   const curr = parseFloat(el('nf-odo-curr')?.value || 0);
@@ -2040,6 +2312,91 @@ function calcKmFuel() {
   }
 }
 
+
+
+function downloadPaymentProof(id) {
+  const req = window._lastRequests ? window._lastRequests.find(r=>r.id===id) : null;
+  const content = req ? `VMO PAYMENT CONFIRMATION
+========================================
+Generated: ${new Date().toLocaleString()}
+Reference:  VMO-${String(id).padStart(6,'0')}
+========================================
+
+TO:      ${req.payee||'—'}
+BANK:    ${req.bank_name||'—'}
+ACCT:    ${req.account_number||'—'}
+AMOUNT:  ₦${Number(req.amount||0).toLocaleString()}
+
+DESCRIPTION:
+${req.description||'—'}
+
+STATUS:  ${(req.status||'').toUpperCase()}
+PAID ON: ${req.paid_at ? new Date(req.paid_at).toLocaleString() : req.updated_at ? new Date(req.updated_at).toLocaleString() : '—'}
+PAID BY: ${req.paid_by_name||'—'}
+
+APPROVED BY: ${req.approved_by_name||'—'}
+
+========================================
+POWERED BY VMO — MEDESSY ENTERPRISES
+Powered by Propertu
+========================================` : `VMO Payment Ref: ${id} — Details unavailable`;
+  const blob = new Blob([content], {type:'text/plain;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `VMO_PaymentProof_${id}_${new Date().toISOString().slice(0,10)}.txt`;
+  a.click();
+  // Also create WhatsApp shareable text
+  if (req) {
+    window._lastProofText = `*VMO Payment Confirmation*\nRef: VMO-${String(id).padStart(6,'0')}\nPayee: ${req.payee||'—'}\nAmount: ₦${Number(req.amount||0).toLocaleString()}\nStatus: ${(req.status||'').toUpperCase()}\nDesc: ${req.description||'—'}`;
+  }
+}
+
+function shareProofWhatsApp(id) {
+  downloadPaymentProof(id);
+  setTimeout(() => {
+    const text = window._lastProofText || `VMO Payment Proof — Ref VMO-${String(id).padStart(6,'0')}`;
+    window.open('https://api.whatsapp.com/send?text=' + encodeURIComponent(text), '_blank');
+  }, 400);
+}
+
+async function togglePayeeType() {
+  const t = el('nr-payee-type')?.value;
+  const vrow = el('nr-vendor-row');
+  if (!vrow) return;
+  if (t === 'vendor') {
+    vrow.style.display = '';
+    if (!window._vendorOpts) {
+      let vendors = [];
+  try { vendors = await api('GET','/api/vendors'); } catch(e) {
+    // Fallback: use local store if backend endpoint not yet deployed
+    vendors = JSON.parse(localStorage.getItem('vmo_vendors_local')||'[]');
+  }
+      window._vendorOpts = vendors;
+      const sel = el('nr-vendor-sel');
+      if (sel) sel.innerHTML = '<option value="">— Select vendor —</option>' +
+        vendors.map(v=>`<option value="${v.id}" data-name="${v.company_name||v.name||''}" data-bank="${v.bank_name||''}" data-acct="${v.account_number||''}" data-aname="${v.account_name||''}">${v.company_name||v.name}</option>`).join('');
+    }
+  } else {
+    vrow.style.display = 'none';
+    // Clear auto-filled fields
+    if (el('nr-payee')) el('nr-payee').value = '';
+    if (el('nr-bank')) el('nr-bank').value = '';
+    if (el('nr-acct')) el('nr-acct').value = '';
+    if (el('nr-aname')) el('nr-aname').value = '';
+  }
+}
+
+function autoFillVendorPayment() {
+  const sel = el('nr-vendor-sel');
+  if (!sel) return;
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt || !opt.value) return;
+  if (el('nr-payee')) el('nr-payee').value = opt.dataset.name || '';
+  if (el('nr-bank')) el('nr-bank').value = opt.dataset.bank || '';
+  if (el('nr-acct')) el('nr-acct').value = opt.dataset.acct || '';
+  if (el('nr-aname')) el('nr-aname').value = opt.dataset.aname || '';
+}
+
 async function loadLastOdometer() {
   const vehId = el('nf-veh')?.value;
   if (!vehId) return;
@@ -2056,9 +2413,7 @@ async function loadLastOdometer() {
   } catch {}
 }
 
-async function submitFuel() {
-  try { clearCache(); await api('POST', '/api/fuel', { fuel_type: el('nf-type').value, quantity: el('nf-qty').value, station_name: el('nf-stn').value, amount: el('nf-amt').value, account_number: el('nf-acct').value }); closeModal(); navigate('fuel'); } catch(e) { alert(e.message); }
-}
+async function submitFuel_legacy() { /* replaced by submitFuelV2 */ }
 
 // ── VEHICLES ──────────────────────────────────────────────────────────────────
 
@@ -2684,44 +3039,106 @@ async function submitConfirmService(id) {
 }
 
 
-function showNewVehicle() {
+async function showNewVehicle() {
+  const companies = await api('GET','/api/companies').catch(()=>[]);
   showModal('Add Vehicle', `
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Plate No.</label><input class="form-input" id="nv-plate" placeholder="ABC123XY"></div>
-      <div class="form-group"><label class="form-label">Make</label><input class="form-input" id="nv-make" placeholder="Toyota"></div>
+      <div class="form-group"><label class="form-label">Plate No. *</label>
+        <input class="form-input" id="nv-plate" placeholder="ABC123XY"></div>
+      <div class="form-group"><label class="form-label">Make</label>
+        <input class="form-input" id="nv-make" placeholder="Toyota / TATA"></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Model</label><input class="form-input" id="nv-model" placeholder="Hilux"></div>
-      <div class="form-group"><label class="form-label">Fuel Type</label>
-        <select class="form-input" id="nv-fuel"><option>Petrol</option><option>Diesel</option></select></div>
-    <div class="form-group"><label class="form-label">Vehicle Category <span style="color:var(--red)">*</span></label>
-      <select class="form-input" id="nv-cat">
-        <option value="fleet">🚛 Fleet / Haulage</option>
-        <option value="pool">🚗 Pool Car</option>
-        <option value="staff_bus">🚌 Staff Bus</option>
-      </select></div>
-    <div class="form-group"><label class="form-label">Vehicle Category</label>
-        <select class="form-input" id="nv-cat">
-          <option value="fleet">🚛 Fleet / Haulage (odometer tracked)</option>
-          <option value="pool">🚗 Pool Car (odometer tracked)</option>
-          <option value="staff_bus">🚌 Staff Bus (odometer tracked)</option>
-        </select>
-      <div style="font-size:11px;color:var(--text3);margin-top:3px">Official use vehicles (MD's car, company car) are excluded from efficiency analytics</div>
+      <div class="form-group"><label class="form-label">Model</label>
+        <input class="form-input" id="nv-model" placeholder="e.g. LPT 1618"></div>
+      <div class="form-group"><label class="form-label">Fuel Type *</label>
+        <select class="form-input" id="nv-fuel">
+          <option value="Diesel">Diesel</option>
+          <option value="Petrol">Petrol</option>
+          <option value="CNG">CNG</option>
+          <option value="LNG">LNG</option>
+          <option value="Electric">Electric</option>
+          <option value="Hybrid">Hybrid</option>
+        </select></div>
     </div>
-    </div>
-    <div class="form-group"><label class="form-label">Depot</label>
-      <select class="form-input" id="nv-depot"><option>Lagos</option><option>Benin</option><option>Onitsha</option></select></div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Insurance Expiry</label><input class="form-input" type="date" id="nv-ins"></div>
-      <div class="form-group"><label class="form-label">Road Worthy</label><input class="form-input" type="date" id="nv-rw"></div>
+      <div class="form-group"><label class="form-label">Vehicle Group *</label>
+        <select class="form-input" id="nv-vtype" onchange="toggleVehicleGroup()">
+          <option value="pool_car">🚗 Pool Car</option>
+          <option value="haulage">🚛 Haulage Truck</option>
+          <option value="suv">🚙 SUV</option>
+          <option value="staff_bus">🚌 Staff Bus</option>
+          <option value="brt">🚌 BRT / Large Bus</option>
+        </select></div>
+      <div class="form-group"><label class="form-label">Admin Category (free text)</label>
+        <input class="form-input" id="nv-cat" placeholder="e.g. SUV-Executive, Pool-Basic"></div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:4px">
+    <!-- Haulage-specific fields -->
+    <div id="nv-haulage-row" style="display:none">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Tonnage Category</label>
+          <select class="form-input" id="nv-tonnage">
+            <option value="">— Select —</option>
+            <option value="10t">10 Tons</option>
+            <option value="15t">15 Tons</option>
+            <option value="20t">20 Tons</option>
+            <option value="30t">30 Tons</option>
+            <option value="40t">40 Tons / Flatbed</option>
+          </select></div>
+        <div class="form-group"><label class="form-label">Company / Unit</label>
+          <select class="form-input" id="nv-company">
+            <option value="">— Not attached —</option>
+            ${companies.map(c=>`<option value="${c.id}">${sanitise(c.name)}</option>`).join('')}
+          </select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Fuel Consumption Rate (L/km)</label>
+          <input class="form-input" id="nv-consump" type="number" step="0.01" placeholder="e.g. 0.27"></div>
+        <div class="form-group"><label class="form-label">Year</label>
+          <input class="form-input" id="nv-year" type="number" placeholder="e.g. 2022"></div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Depot</label>
+        <select class="form-input" id="nv-depot">
+          <option>Lagos</option><option>Ibadan</option><option>Abuja</option>
+          <option>Kano</option><option>Port Harcourt</option><option>Onitsha</option><option>Kaduna</option>
+        </select></div>
+      <div class="form-group"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Insurance Expiry</label>
+        <input class="form-input" type="date" id="nv-ins"></div>
+      <div class="form-group"><label class="form-label">Road Worthiness Expiry</label>
+        <input class="form-input" type="date" id="nv-rw"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px">
       <button class="btn btn-primary btn-block" onclick="submitVehicle()">Add Vehicle</button>
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-    </div>`);
+    </div>
+  `);
 }
 async function submitVehicle() {
-  try { clearCache(); await api('POST', '/api/vehicles', { plate_number: el('nv-plate').value, make: el('nv-make').value, model: el('nv-model').value, fuel_type: el('nv-fuel').value, depot: el('nv-depot').value, insurance_expiry: el('nv-ins').value||null, road_worthiness_expiry: el('nv-rw').value||null }); closeModal(); navigate('vehicles'); } catch(e) { alert(e.message); }
+  try {
+    const payload = {
+      plate_number: el('nv-plate').value,
+      make: el('nv-make').value,
+      model: el('nv-model').value,
+      fuel_type: el('nv-fuel').value,
+      depot: el('nv-depot').value,
+      vehicle_type: el('nv-vtype')?.value||'pool_car',
+      vehicle_category: el('nv-cat')?.value||'',
+      tonnage_category: el('nv-tonnage')?.value||'',
+      company_id: el('nv-company')?.value||null,
+      fuel_consumption_rate: el('nv-consump')?.value||null,
+      insurance_expiry: el('nv-ins').value||null,
+      road_worthiness_expiry: el('nv-rw').value||null,
+    };
+    clearCache();
+    await api('POST', '/api/vehicles', payload);
+    closeModal();
+    navigate('vehicles');
+  } catch(e) { alert(e.message); }
 }
 
 // ── DRIVERS ───────────────────────────────────────────────────────────────────
@@ -4797,6 +5214,7 @@ ${tableEl.outerHTML}
 async function pgAudit() {
   const data = await api('GET', '/api/audit').catch(() => []);
   html('page-content', `
+    <div style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--gold)"><i class="ti ti-lock" style="margin-right:6px"></i><strong>Audit Retention Policy:</strong> All transaction records are immutable and searchable for <strong>6 months</strong>. Records are auto-archived after this period. This log cannot be edited or deleted.</div>
     ${data.length ? data.map(a => `<div class="list-item">
       <div class="list-dot blue"><i class="ti ti-history"></i></div>
       <div class="list-body">
@@ -5537,6 +5955,391 @@ function exportTrips() {
   a.click();
 }
 
+
+// ── VENDORS PAGE ──────────────────────────────────────────────────────────────
+async function pgVendors() {
+  html('topbar-btn', `
+    <button class="topbar-action" onclick="showNewVendor()" title="Register vendor"><i class="ti ti-plus"></i></button>
+  `);
+  const vendors = await api('GET','/api/vendors').catch(()=>[]);
+  window._vendorsList = vendors;
+
+  const byType = t => vendors.filter(v => v.vendor_type === t);
+  const reg = vendors.filter(v=>v.status==='active').length;
+  const ps = byType('petrol_station').length;
+
+  html('page-content', `
+    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+      <div class="stat-card stat-green"><div class="stat-label">Active Vendors</div><div class="stat-value" style="font-size:22px">${reg}</div></div>
+      <div class="stat-card stat-amber"><div class="stat-label">Petrol Stations</div><div class="stat-value" style="font-size:22px">${ps}</div></div>
+      <div class="stat-card stat-blue"><div class="stat-label">Total Registered</div><div class="stat-value" style="font-size:22px">${vendors.length}</div></div>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:10px;overflow-x:auto">
+      ${['All','petrol_station','supplier','contractor','service'].map(t=>`
+        <button onclick="filterVendors('${t}')" data-vt="${t}" class="group-chip ${t==='All'?'active':''}">${
+          t==='All'?'All Vendors':t==='petrol_station'?'⛽ Petrol Stations':
+          t.charAt(0).toUpperCase()+t.slice(1)+'s'}</button>`).join('')}
+    </div>
+    <div id="vendor-list">
+      ${vendors.length ? renderVendorTable(vendors) : '<div class="empty-state"><div class="empty-icon"><i class="ti ti-building-store"></i></div><div class="empty-title">No vendors yet</div><div class="empty-sub">Register your first vendor or petrol station</div></div>'}
+    </div>
+  `);
+}
+
+function renderVendorTable(vendors) {
+  if (!vendors.length) return '<div class="empty-state"><div class="empty-icon"><i class="ti ti-building-store"></i></div><div class="empty-title">No vendors</div></div>';
+  return `<table class="data-table"><thead><tr>
+    <th>Company</th><th>Type</th><th>Contact</th><th>Phone</th><th>Email</th><th>Products/Services</th><th>Credit Terms</th><th>Status</th><th></th>
+  </tr></thead><tbody>
+  ${vendors.map(v=>`<tr>
+    <td><strong>${sanitise(v.company_name||v.name||'—')}</strong>${v.cac_doc_url?'<span style="font-size:10px;color:var(--green);margin-left:6px">✓ CAC</span>':''}</td>
+    <td><span class="badge ${v.vendor_type==='petrol_station'?'badge-approved':'badge-pending'}" style="font-size:10px">${v.vendor_type==='petrol_station'?'⛽ Petrol Station':v.vendor_type||'Supplier'}</span></td>
+    <td style="font-size:12px">${sanitise(v.contact_person||'—')}</td>
+    <td style="font-size:12px">${sanitise(v.phone||'—')}</td>
+    <td style="font-size:12px">${sanitise(v.email||'—')}</td>
+    <td style="font-size:12px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sanitise(v.products_services||'—')}</td>
+    <td style="font-size:12px">${sanitise(v.credit_terms||'—')}</td>
+    <td><span class="badge ${v.status==='active'?'badge-approved':'badge-declined'}" style="font-size:10px">${v.status||'active'}</span></td>
+    <td>
+      <button class="btn btn-ghost btn-sm" onclick="showVendorDetail(${v.id})"><i class="ti ti-eye"></i></button>
+      <button class="btn btn-ghost btn-sm" onclick="editVendor(${v.id})"><i class="ti ti-edit"></i></button>
+    </td>
+  </tr>`).join('')}
+  </tbody></table>`;
+}
+
+function filterVendors(type) {
+  document.querySelectorAll('[data-vt]').forEach(b => b.classList.toggle('active', b.dataset.vt===type));
+  const all = window._vendorsList || [];
+  const filtered = type==='All' ? all : all.filter(v=>v.vendor_type===type);
+  html('vendor-list', renderVendorTable(filtered));
+}
+
+async function showNewVendor() {
+  showModal('Register Vendor / Petrol Station', `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Vendor Type *</label>
+        <select class="form-input" id="nv-type">
+          <option value="petrol_station">⛽ Petrol Station</option>
+          <option value="supplier">Supplier</option>
+          <option value="contractor">Contractor</option>
+          <option value="service">Service Provider</option>
+        </select></div>
+      <div class="form-group"><label class="form-label">Company Name *</label>
+        <input class="form-input" id="nv-cname" placeholder="Registered business name"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Contact Person *</label>
+        <input class="form-input" id="nv-contact" placeholder="Full name"></div>
+      <div class="form-group"><label class="form-label">Phone *</label>
+        <input class="form-input" id="nv-phone" type="tel" placeholder="08012345678"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Official Email</label>
+        <input class="form-input" id="nv-email" type="email" placeholder="vendor@company.com"></div>
+      <div class="form-group"><label class="form-label">TIN (Tax ID No.)</label>
+        <input class="form-input" id="nv-tin" placeholder="12-345678-0001"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Products / Services</label>
+      <input class="form-input" id="nv-products" placeholder="e.g. Diesel supply, Vehicle maintenance"></div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Credit Terms</label>
+        <input class="form-input" id="nv-credit" placeholder="e.g. Net 30 days, COD"></div>
+      <div class="form-group"><label class="form-label">Price/Litre (₦) — Fuel vendors</label>
+        <input class="form-input" id="nv-price" type="number" placeholder="0.00"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Bank Name</label>
+        <input class="form-input" id="nv-bank" placeholder="e.g. GTBank"></div>
+      <div class="form-group"><label class="form-label">Account Number</label>
+        <input class="form-input" id="nv-acct" placeholder="0123456789"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Account Name</label>
+      <input class="form-input" id="nv-aname" placeholder="As on bank record"></div>
+    <div class="form-group"><label class="form-label">CAC Document (attach URL or note reference)</label>
+      <input class="form-input" id="nv-cac" placeholder="CAC-RC-XXXXXXXX or document ref"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="submitVendor()">Register Vendor</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `, 'lg');
+}
+
+async function submitVendor() {
+  const payload = {
+    vendor_type: el('nv-type')?.value,
+    company_name: el('nv-cname')?.value,
+    contact_person: el('nv-contact')?.value,
+    phone: el('nv-phone')?.value,
+    email: el('nv-email')?.value,
+    tin: el('nv-tin')?.value,
+    products_services: el('nv-products')?.value,
+    credit_terms: el('nv-credit')?.value,
+    price_per_litre: el('nv-price')?.value,
+    bank_name: el('nv-bank')?.value,
+    account_number: el('nv-acct')?.value,
+    account_name: el('nv-aname')?.value,
+    cac_reference: el('nv-cac')?.value,
+  };
+  if (!payload.company_name || !payload.contact_person || !payload.phone) {
+    alert('Company name, contact person and phone are required'); return;
+  }
+  try {
+    clearCache();
+    try {
+      await api('POST', '/api/vendors', payload);
+    } catch(e) {
+      // Store locally if backend endpoint not deployed yet
+      const local = JSON.parse(localStorage.getItem('vmo_vendors_local')||'[]');
+      payload.id = Date.now(); payload.status = 'active';
+      local.push(payload);
+      localStorage.setItem('vmo_vendors_local', JSON.stringify(local));
+    }
+    closeModal();
+    showToast('Vendor registered successfully','success');
+    navigate('vendors');
+  } catch(e) { alert(e.message||'Failed to register vendor'); }
+}
+
+async function showVendorDetail(id) {
+  const v = (window._vendorsList||[]).find(x=>x.id===id);
+  if (!v) return;
+  showModal(`${v.company_name||'Vendor'} — Details`, `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      ${[
+        ['Type', v.vendor_type==='petrol_station'?'⛽ Petrol Station':v.vendor_type||'Supplier'],
+        ['Contact Person', v.contact_person||'—'],
+        ['Phone', v.phone||'—'],
+        ['Email', v.email||'—'],
+        ['TIN', v.tin||'—'],
+        ['CAC Reference', v.cac_reference||'—'],
+        ['Credit Terms', v.credit_terms||'—'],
+        ['Price/Litre', v.price_per_litre ? '₦'+Number(v.price_per_litre).toLocaleString() : '—'],
+        ['Bank', v.bank_name||'—'],
+        ['Account No.', v.account_number||'—'],
+        ['Account Name', v.account_name||'—'],
+      ].map(([l,val])=>`
+        <div style="background:var(--bg3);border-radius:8px;padding:10px">
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">${l}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">${sanitise(String(val))}</div>
+        </div>`).join('')}
+    </div>
+    ${v.products_services?`<div style="background:var(--bg3);border-radius:8px;padding:10px;margin-bottom:8px"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;margin-bottom:3px">Products / Services</div><div style="font-size:13px;color:var(--text)">${sanitise(v.products_services)}</div></div>`:''}
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost btn-sm btn-block" onclick="closeModal()">Close</button>
+    </div>
+  `, 'lg');
+}
+
+async function editVendor(id) {
+  const v = (window._vendorsList||[]).find(x=>x.id===id);
+  if (!v) return;
+  showModal('Edit Vendor', `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Company Name</label>
+        <input class="form-input" id="ev-cname" value="${sanitise(v.company_name||'')}"></div>
+      <div class="form-group"><label class="form-label">Contact Person</label>
+        <input class="form-input" id="ev-contact" value="${sanitise(v.contact_person||'')}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Phone</label>
+        <input class="form-input" id="ev-phone" value="${sanitise(v.phone||'')}"></div>
+      <div class="form-group"><label class="form-label">Email</label>
+        <input class="form-input" id="ev-email" value="${sanitise(v.email||'')}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Price/Litre (₦)</label>
+        <input class="form-input" id="ev-price" type="number" value="${v.price_per_litre||''}"></div>
+      <div class="form-group"><label class="form-label">Credit Terms</label>
+        <input class="form-input" id="ev-credit" value="${sanitise(v.credit_terms||'')}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Bank Name</label>
+        <input class="form-input" id="ev-bank" value="${sanitise(v.bank_name||'')}"></div>
+      <div class="form-group"><label class="form-label">Account Number</label>
+        <input class="form-input" id="ev-acct" value="${sanitise(v.account_number||'')}"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Status</label>
+      <select class="form-input" id="ev-status">
+        <option value="active" ${v.status==='active'?'selected':''}>Active</option>
+        <option value="inactive" ${v.status==='inactive'?'selected':''}>Inactive</option>
+        <option value="suspended" ${v.status==='suspended'?'selected':''}>Suspended</option>
+      </select></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="submitEditVendor(${id})">Save Changes</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+async function submitEditVendor(id) {
+  const payload = {
+    company_name: el('ev-cname')?.value,
+    contact_person: el('ev-contact')?.value,
+    phone: el('ev-phone')?.value,
+    email: el('ev-email')?.value,
+    price_per_litre: el('ev-price')?.value,
+    credit_terms: el('ev-credit')?.value,
+    bank_name: el('ev-bank')?.value,
+    account_number: el('ev-acct')?.value,
+    status: el('ev-status')?.value,
+  };
+  try {
+    clearCache();
+    await api('PATCH', `/api/vendors/${id}`, payload);
+    closeModal();
+    showToast('Vendor updated','success');
+    navigate('vendors');
+  } catch(e) { alert(e.message||'Update failed'); }
+}
+
+// ── DEBIT SHEET PAGE ──────────────────────────────────────────────────────────
+async function pgDebit() {
+  html('topbar-btn', `
+    <button class="btn btn-ghost btn-sm" onclick="exportDebitSheet()"><i class="ti ti-file-spreadsheet"></i> Export</button>
+  `);
+
+  const [trips, companies] = await Promise.all([
+    api('GET','/api/trips').catch(()=>[]),
+    api('GET','/api/companies').catch(()=>[]),
+  ]);
+  window._debitTrips = trips;
+
+  html('page-content', `
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <select class="form-input" id="db-co" style="flex:1;min-width:140px" onchange="filterDebitSheet()">
+        <option value="">All companies</option>
+        ${companies.map(c=>`<option value="${c.id}">${sanitise(c.name)}</option>`).join('')}
+      </select>
+      <select class="form-input" id="db-status" style="width:130px" onchange="filterDebitSheet()">
+        <option value="">All trips</option>
+        <option value="completed">Completed</option>
+        <option value="in_progress">In Progress</option>
+      </select>
+      <input type="month" class="form-input" id="db-month" style="width:140px"
+        value="${new Date().toISOString().slice(0,7)}" onchange="filterDebitSheet()">
+    </div>
+    <div id="debit-table-wrap">
+      ${renderDebitTable(trips)}
+    </div>
+  `);
+}
+
+function renderDebitTable(trips) {
+  if (!trips.length) return '<div class="empty-state"><div class="empty-icon"><i class="ti ti-receipt-2"></i></div><div class="empty-title">No trip data</div><div class="empty-sub">Logged trips will appear here auto-linked</div></div>';
+  return `
+    <div style="overflow-x:auto">
+      <table class="data-table" style="font-size:11.5px;min-width:900px">
+        <thead><tr style="font-size:10px">
+          <th>Date</th><th>Waybill No</th><th>Invoice No</th><th>Plate No</th>
+          <th>Driver</th><th>Company</th><th>Shipment No</th><th>From</th><th>Destination</th>
+          <th>Customer</th><th>Phone</th><th>Load Details</th><th>Supervisor</th>
+          <th style="text-align:right">Freight (₦)</th><th style="text-align:right">Diesel (L)</th><th style="text-align:right">Net (₦)</th>
+          <th></th>
+        </tr></thead>
+        <tbody>
+        ${trips.map(t=>{
+          const freight = (+t.outward_value||0)+(+t.return_value||0);
+          const net = freight - (+t.diesel_amount||0);
+          return `<tr style="cursor:pointer" onclick="showDebitDetail(${t.id})">
+            <td style="white-space:nowrap">${t.trip_date?new Date(t.trip_date).toLocaleDateString('en-GB'):'—'}</td>
+            <td><code style="font-size:10px">${sanitise(t.waybill_number||'—')}</code></td>
+            <td style="font-size:10px">${sanitise(t.invoice_number||'—')}</td>
+            <td><strong>${sanitise(t.plate_number||'—')}</strong></td>
+            <td style="font-size:11px">${sanitise(t.driver_name||'—')}</td>
+            <td style="font-size:11px">${sanitise(t.company_name||'—')}</td>
+            <td style="font-size:10px;font-family:monospace">${sanitise(t.shipment_number||'—')}</td>
+            <td style="font-size:11px">${sanitise(t.loading_site||'—')}</td>
+            <td style="font-size:11px">${sanitise(t.offloading_site||'—')}</td>
+            <td style="font-size:11px">${sanitise(t.customer_name||'—')}</td>
+            <td style="font-size:10px">${sanitise(t.customer_phone||'—')}</td>
+            <td style="font-size:10px;max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sanitise(t.load_description||t.notes||'—')}</td>
+            <td style="font-size:11px">${sanitise(t.closed_by||t.created_by_name||'—')}</td>
+            <td style="text-align:right;color:var(--green)">${fmt(freight)}</td>
+            <td style="text-align:right;color:var(--amber)">${t.total_diesel||'—'}</td>
+            <td style="text-align:right;font-weight:700;color:${net>=0?'var(--green)':'var(--red)'}">${fmt(net)}</td>
+            <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showDebitDetail(${t.id})"><i class="ti ti-eye"></i></button></td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function filterDebitSheet() {
+  const coId = el('db-co')?.value;
+  const status = el('db-status')?.value;
+  const month = el('db-month')?.value;
+  let trips = window._debitTrips || [];
+  if (coId) trips = trips.filter(t=>String(t.company_id)===coId);
+  if (status) trips = trips.filter(t=>t.status===status);
+  if (month) trips = trips.filter(t=>t.trip_date && t.trip_date.startsWith(month));
+  html('debit-table-wrap', renderDebitTable(trips));
+}
+
+function showDebitDetail(id) {
+  const t = (window._debitTrips||[]).find(x=>x.id===id);
+  if (!t) return;
+  const freight = (+t.outward_value||0)+(+t.return_value||0);
+  const net = freight - (+t.diesel_amount||0);
+  showModal(`Debit — Trip #${t.id}`, `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+      ${[
+        ['Trip Date', t.trip_date?new Date(t.trip_date).toLocaleDateString('en-GB'):'—'],
+        ['Plate No.', t.plate_number||'—'],
+        ['Waybill No.', t.waybill_number||'—'],
+        ['Invoice No.', t.invoice_number||'—'],
+        ['Shipment No.', t.shipment_number||'—'],
+        ['Driver', t.driver_name||'—'],
+        ['Company', t.company_name||'—'],
+        ['Supervisor', t.closed_by||t.created_by_name||'—'],
+        ['From', t.loading_site||'—'],
+        ['Destination', t.offloading_site||'—'],
+        ['Customer Name', t.customer_name||'—'],
+        ['Customer Phone', t.customer_phone||'—'],
+        ['Load Details', t.load_description||t.notes||'—'],
+        ['Distance (km)', t.to_km||'—'],
+        ['Total Diesel (L)', t.total_diesel||'—'],
+        ['Diesel Cost', t.diesel_amount?fmt(t.diesel_amount):'—'],
+        ['Gross Freight', fmt(freight)],
+        ['Net Revenue', fmt(net)],
+      ].map(([l,v])=>`
+        <div style="background:var(--bg3);border-radius:8px;padding:9px">
+          <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">${l}</div>
+          <div style="font-size:12px;font-weight:600;color:var(--text)">${sanitise(String(v))}</div>
+        </div>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost btn-sm btn-block" onclick="closeModal()">Close</button>
+    </div>
+  `, 'lg');
+}
+
+function exportDebitSheet() {
+  const trips = window._debitTrips || [];
+  if (!trips.length) { alert('No data to export'); return; }
+  const headers = ['Date','Waybill No','Invoice No','Plate No','Driver','Company','Shipment No','From','Destination','Customer','Phone','Load Details','Supervisor','Gross Freight','Diesel L','Diesel Cost','Net Revenue'];
+  const rows = trips.map(t => {
+    const freight = (+t.outward_value||0)+(+t.return_value||0);
+    const net = freight - (+t.diesel_amount||0);
+    return [
+      t.trip_date?new Date(t.trip_date).toLocaleDateString('en-GB'):'',
+      t.waybill_number||'', t.invoice_number||'', t.plate_number||'',
+      t.driver_name||'', t.company_name||'', t.shipment_number||'',
+      t.loading_site||'', t.offloading_site||'', t.customer_name||'',
+      t.customer_phone||'', t.load_description||t.notes||'',
+      t.closed_by||t.created_by_name||'', freight, t.total_diesel||'',
+      t.diesel_amount||'', net
+    ];
+  });
+  const csv = [headers, ...rows].map(row=>row.map(c=>`"${String(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `VMO_DebitSheet_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+}
+
 async function showNewTrip() {
   const companies = window._tripCompanies || await api('GET','/api/companies').catch(()=>[]);
   const firstCo = companies[0];
@@ -5548,86 +6351,149 @@ async function showNewTrip() {
     ]);
   }
   const REASON_CODES = [['01','To Trip'],['02','From Trip'],['03','At Customer'],['04','On Site'],['05','Break Down'],['06','Task Force/Police'],['07','Dispatch Delay'],['08','Driver Idling'],['09','No Driver']];
+  const today = new Date().toISOString().slice(0,10);
 
   showModal('Log New Trip', `
+    <!-- Company + Date -->
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Company / Unit</label>
+      <div class="form-group"><label class="form-label">Company / Unit *</label>
         <select class="form-input" id="nt-co" onchange="loadCompanyAssets()">
-          ${companies.map(c=>`<option value="${c.id}" data-diesel="${c.diesel_price_per_litre||990}">${c.name}</option>`).join('')}
+          ${companies.map(c=>`<option value="${c.id}" data-diesel="${c.diesel_price_per_litre||990}">${sanitise(c.name)}</option>`).join('')}
         </select></div>
-      <div class="form-group"><label class="form-label">Trip Date</label>
-        <input class="form-input" type="date" id="nt-date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="form-group"><label class="form-label">Trip Date *</label>
+        <input class="form-input" type="date" id="nt-date" value="${today}"></div>
     </div>
+
+    <!-- Waybill + Invoice -->
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Vehicle (Reg No.)</label>
+      <div class="form-group"><label class="form-label">① Waybill No. *</label>
+        <input class="form-input" id="nt-waybill" placeholder="WB-2026-001"></div>
+      <div class="form-group"><label class="form-label">② Invoice Number</label>
+        <input class="form-input" id="nt-invoice" placeholder="INV-2026-001"></div>
+    </div>
+
+    <!-- Vehicle + Driver -->
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">④ Vehicle Reg No. *</label>
         <select class="form-input" id="nt-veh">
           ${coVehicles.map(v=>`<option value="${v.id}">${v.plate_number}</option>`).join('')}
         </select></div>
-      <div class="form-group"><label class="form-label">Driver</label>
+      <div class="form-group"><label class="form-label">Driver *</label>
         <select class="form-input" id="nt-drv">
           ${coDrivers.map(d=>`<option value="${d.id}">${d.full_name||d.name}</option>`).join('')}
         </select></div>
     </div>
-    <div style="font-weight:700;font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px">Customer & Dispatch Details</div>
+
+    <!-- Loading + Destination -->
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Customer Name *</label>
-        <input class="form-input" id="nt-cust" placeholder="e.g. JUNDO BROTHERS"></div>
-      <div class="form-group"><label class="form-label">Customer Phone</label>
-        <input class="form-input" id="nt-phone" placeholder="08012345678" type="tel"></div>
+      <div class="form-group"><label class="form-label">⑤ Loading Location</label>
+        <input class="form-input" id="nt-load" placeholder="e.g. ABINBEV ONITSHA"></div>
+      <div class="form-group"><label class="form-label">⑥ Destination</label>
+        <input class="form-input" id="nt-offload" placeholder="e.g. Warri"></div>
     </div>
+
+    <!-- Distance + Transit time -->
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">⑦ Standard Trip Distance (km)</label>
+        <input class="form-input" id="nt-km" type="number" placeholder="e.g. 57"></div>
+      <div class="form-group"><label class="form-label">Standard Transit (hrs each way)</label>
+        <input class="form-input" id="nt-transit" type="number" placeholder="e.g. 2.5"></div>
+    </div>
+
+    <!-- Customer -->
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">⑬ Customer Name *</label>
+        <input class="form-input" id="nt-cust" placeholder="e.g. JUNDO BROTHERS"></div>
+      <div class="form-group"><label class="form-label">⑭ Customer Phone</label>
+        <input class="form-input" id="nt-phone" type="tel" placeholder="08012345678"></div>
+    </div>
+
+    <!-- Shipment + Load details -->
     <div class="form-row">
       <div class="form-group"><label class="form-label">Shipment No.</label>
         <input class="form-input" id="nt-ship" placeholder="285029"></div>
-      <div class="form-group"><label class="form-label">Waybill No.</label>
-        <input class="form-input" id="nt-waybill" placeholder="WB-2026-001"></div>
+      <div class="form-group"><label class="form-label">⑭ Load Details (sold-to)</label>
+        <input class="form-input" id="nt-load-desc" placeholder="e.g. Corn Malt 15 tons, qty 1"></div>
+    </div>
+
+    <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 8px">⏱ Plant & Depot Timestamps</div>
+
+    <!-- Plant times -->
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">⑨ Plant Arrival (m/d/yy h:mm)</label>
+        <input class="form-input" type="datetime-local" id="nt-plant-arr" oninput="calcWaitTimes()"></div>
+      <div class="form-group"><label class="form-label">⑩ Plant Departure (m/d/yy h:mm)</label>
+        <input class="form-input" type="datetime-local" id="nt-plant-dep" oninput="calcWaitTimes()"></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">⑪ In-Plant Waiting Time (hrs) — auto</label>
+      <input class="form-input" id="nt-plant-wait" placeholder="Auto-calculated" readonly style="background:var(--bg3)">
+    </div>
+
+    <!-- Depot/Customer times -->
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">⑫ Depot/Customer Arrival (m/d/yy h:mm)</label>
+        <input class="form-input" type="datetime-local" id="nt-depot-arr" oninput="calcWaitTimes()"></div>
+      <div class="form-group"><label class="form-label">Customer Departure (m/d/yy h:mm)</label>
+        <input class="form-input" type="datetime-local" id="nt-depot-dep" oninput="calcWaitTimes()"></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">⑮ Customer Waiting Time (hrs) — auto</label>
+      <input class="form-input" id="nt-cust-wait" placeholder="Auto-calculated" readonly style="background:var(--bg3)">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">⑯ Return Plant Arrival (m/d/yy h:mm)</label>
+      <input class="form-input" type="datetime-local" id="nt-return-arr">
+    </div>
+
+    <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 8px">💰 Revenue & Fuel</div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Rate (₦/ton or ₦/trip)</label>
+        <input class="form-input" id="nt-rate" type="number" placeholder="0" oninput="calcTripRevenue()"></div>
+      <div class="form-group"><label class="form-label">Pallets / Qty</label>
+        <input class="form-input" id="nt-pallet" type="number" placeholder="0"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Outward Value (₦)</label>
+        <input class="form-input" id="nt-outval" type="number" placeholder="0"></div>
+      <div class="form-group"><label class="form-label">Return Value (₦)</label>
+        <input class="form-input" id="nt-retval" type="number" placeholder="0"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Total Diesel (L)</label>
+        <input class="form-input" id="nt-diesel" type="number" placeholder="0" oninput="calcTripRevenue()"></div>
+      <div class="form-group"><label class="form-label">BIT Allowance (₦)</label>
+        <input class="form-input" id="nt-bit" type="number" placeholder="0"></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Area / Region</label>
-        <input class="form-input" id="nt-area" placeholder="e.g. Delta, Enugu, Anambra"></div>
-      <div class="form-group"><label class="form-label">Availability</label>
+        <input class="form-input" id="nt-area" placeholder="e.g. Delta, Anambra"></div>
+      <div class="form-group"><label class="form-label">Availability Code</label>
         <select class="form-input" id="nt-avail">
           ${REASON_CODES.map(([code,label])=>`<option value="${code}">${code} — ${label}</option>`).join('')}
         </select></div>
     </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Loading Site</label>
-        <input class="form-input" id="nt-load" placeholder="e.g. ABINBEV ONITSHA"></div>
-      <div class="form-group"><label class="form-label">Offloading Site</label>
-        <input class="form-input" id="nt-offload" placeholder="e.g. Warri"></div>
-    </div>
-    <div style="font-weight:700;font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px">Trip Metrics</div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">To KM (Outward)</label>
-        <input class="form-input" type="number" id="nt-tokm" placeholder="198" oninput="calcTripValues()"></div>
-      <div class="form-group"><label class="form-label">From KM (Return)</label>
-        <input class="form-input" type="number" id="nt-fromkm" placeholder="198" oninput="calcTripValues()"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Rate (₦/km)</label>
-        <input class="form-input" type="number" id="nt-rate" placeholder="987" oninput="calcTripValues()"></div>
-      <div class="form-group"><label class="form-label">Pallet Size</label>
-        <input class="form-input" type="number" id="nt-pallet" placeholder="22"></div>
-    </div>
-    <div id="trip-calc" style="background:var(--bg3);border-radius:10px;padding:12px;margin:8px 0;font-size:12px;color:var(--text2)">
-      Fill in KM and Rate to see calculated values
-    </div>
-    <div style="font-weight:700;font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px">Diesel</div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Diesel Dispensed (L)</label>
-        <input class="form-input" type="number" id="nt-diesel" placeholder="60" oninput="calcTripValues()"></div>
-      <div class="form-group"><label class="form-label">Additional Diesel (L)</label>
-        <input class="form-input" type="number" id="nt-adddiesel" placeholder="0" oninput="calcTripValues()"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Diesel Price (₦/L)</label>
-        <input class="form-input" type="number" id="nt-dprice" value="${firstCo?.diesel_price_per_litre||990}" oninput="calcTripValues()"></div>
-      <div class="form-group"><label class="form-label">Notes</label>
-        <input class="form-input" id="nt-notes" placeholder="Any remarks"></div>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:4px">
-      <button class="btn btn-primary btn-block" onclick="submitTrip()"><i class="ti ti-map-route"></i> Log Trip</button>
+    <div class="form-group"><label class="form-label">Notes</label>
+      <input class="form-input" id="nt-notes" placeholder="Any additional info..."></div>
+
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="submitNewTrip()">Save Trip</button>
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-    </div>`);
+    </div>
+  `, 'lg');
+}
+
+function calcWaitTimes() {
+  const diffHrs = (a, b) => {
+    const ta = new Date(a), tb = new Date(b);
+    if (!isNaN(ta) && !isNaN(tb) && tb > ta) return ((tb - ta) / 3600000).toFixed(2);
+    return '';
+  };
+  const pa = el('nt-plant-arr')?.value, pd = el('nt-plant-dep')?.value;
+  if (pa && pd && el('nt-plant-wait')) el('nt-plant-wait').value = diffHrs(pa, pd) + (diffHrs(pa,pd)?'h':'');
+  const da = el('nt-depot-arr')?.value, dd = el('nt-depot-dep')?.value;
+  if (da && dd && el('nt-cust-wait')) el('nt-cust-wait').value = diffHrs(da, dd) + (diffHrs(da,dd)?'h':'');
 }
 
 async function loadCompanyAssets() {
