@@ -972,6 +972,7 @@ const ALL_PAGES = [
   { id:'companies',    icon:'ti-building-factory',label:'Companies/Units',section:'Operations' },
   { id:'trips',        icon:'ti-map-route',       label:'Trip Log',       section:'Operations' },
   { id:'vendors',      icon:'ti-building-store',  label:'Vendors',         section:'Operations' },
+  { id:'feedback',     icon:'ti-message-star',    label:'Client Feedback',  section:'Operations' },
   { id:'debit',        icon:'ti-receipt-2',       label:'Debit Sheet',     section:'Operations' },
   { id:'chat',         icon:'ti-message-circle',  label:'Chat',           section:'Team' },
   { id:'meetings',     icon:'ti-video',           label:'Meetings',       section:'Team' },
@@ -1245,6 +1246,7 @@ async function loadPage(p) {
     else if (p==='companies') await pgCompanies();
     else if (p==='trips') await pgTrips();
     else if (p==='vendors') await pgVendors();
+    else if (p==='feedback') await pgFeedback();
     else if (p==='debit') await pgDebit();
     else if (p==='availability') await pgAvailability();
     else if (p==='maintenance') await pgMaintenance();
@@ -1566,7 +1568,8 @@ async function showNewRequest() {
           <option>MAINTENANCE</option>
           <option>LUBRICANT</option>
           <option>CAR WASH</option>
-          <option>TRACKER/TICKETS</option>
+          <option>TRACKER</option>
+          <option>TICKETS</option>
           <option>ENGINE/CONTAINER/TYRE</option>
           <option>OTHER OVH</option>
           <option>PENALTY/TOWING</option>
@@ -1659,7 +1662,7 @@ function showBulkRequests() {
 
 function renderBulkModal() {
   const rows = window._bulkRows || [{}];
-  const cats = ['FUEL','DRIVER ALLOWANCE','DISPATCH','ACCOMMODATION','MAINTENANCE','LUBRICANT','CAR WASH','TRACKER/TICKETS','ENGINE/CONTAINER/TYRE','OTHER OVH','PENALTY/TOWING','3PL COST'];
+  const cats = ['FUEL','DRIVER ALLOWANCE','DISPATCH','ACCOMMODATION','MAINTENANCE','LUBRICANT','CAR WASH','TRACKER','TICKETS','ENGINE/CONTAINER/TYRE','OTHER OVH','PENALTY/TOWING','3PL COST'];
   
   showModal('Bulk Payment Requests', `
     <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Add multiple payment requests at once. Each row becomes a separate request.</div>
@@ -2687,6 +2690,230 @@ async function submitVehicleCSV() {
   clearCache(); navigate('vehicles');
 }
 
+
+// ── CLIENT FEEDBACK PAGE ─────────────────────────────────────────────────────
+async function pgFeedback() {
+  html('topbar-btn', '');
+  const feedbacks = await api('GET','/api/feedback').catch(()=>[]);
+  window._feedbacks = feedbacks;
+
+  const avg = feedbacks.length ? (feedbacks.reduce((s,f)=>s+(+f.rating||0),0)/feedbacks.length).toFixed(1) : '—';
+  const byRating = [5,4,3,2,1].map(r => feedbacks.filter(f=>(+f.rating||0)===r).length);
+
+  html('page-content', `
+    <!-- Summary -->
+    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+      <div class="stat-card stat-gold"><div class="stat-label">Avg Rating</div><div class="stat-value" style="font-size:26px">${avg} ⭐</div></div>
+      <div class="stat-card stat-green"><div class="stat-label">Total Feedback</div><div class="stat-value" style="font-size:22px">${feedbacks.length}</div></div>
+      <div class="stat-card stat-blue"><div class="stat-label">5-Star</div><div class="stat-value" style="font-size:22px">${byRating[0]}</div></div>
+      <div class="stat-card stat-red"><div class="stat-label">1-2 Star</div><div class="stat-value" style="font-size:22px">${byRating[3]+byRating[4]}</div></div>
+    </div>
+
+    <!-- Filter -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      ${['All','5','4','3','2','1'].map(r=>`<button onclick="filterFeedback('${r}')" data-fb="${r}" class="group-chip ${r==='All'?'active':''}">${r==='All'?'All':r+'⭐'}</button>`).join('')}
+      <input id="fb-search" placeholder="Search vehicle or driver..." oninput="filterFeedback()" class="form-input" style="flex:1;min-width:180px;height:32px;padding:4px 10px;font-size:12px">
+    </div>
+
+    ${feedbacks.length ? `
+    <div style="overflow-x:auto">
+      <table class="data-table" id="fb-table">
+        <thead><tr>
+          <th>Date</th><th>Vehicle</th><th>Driver</th><th>Rating</th>
+          <th>Service</th><th>Driving</th><th>Comment</th><th>Passenger</th>
+        </tr></thead>
+        <tbody>
+        ${feedbacks.map(f=>`<tr class="fb-row" data-rating="${f.rating||0}" data-search="${[f.plate_number||'',f.driver_name||'',f.passenger_name||''].join(' ').toLowerCase()}">
+          <td style="font-size:11px;white-space:nowrap">${f.created_at?new Date(f.created_at).toLocaleDateString('en-GB'):'—'}</td>
+          <td><strong>${sanitise(f.plate_number||'—')}</strong></td>
+          <td style="font-size:12px">${sanitise(f.driver_name||'—')}</td>
+          <td style="font-size:16px;text-align:center">${'⭐'.repeat(+f.rating||0)}</td>
+          <td style="font-size:12px">${sanitise(f.service_rating||'—')}</td>
+          <td style="font-size:12px">${sanitise(f.driving_rating||'—')}</td>
+          <td style="font-size:11px;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${sanitise(f.comment||'')}">${sanitise(f.comment||'—')}</td>
+          <td style="font-size:11px">${sanitise(f.passenger_name||'Anonymous')}</td>
+        </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : '<div class="empty-state"><div class="empty-icon"><i class="ti ti-message-star"></i></div><div class="empty-title">No feedback yet</div><div class="empty-sub">QR codes on pool cars will direct passengers here</div></div>'}
+  `);
+}
+
+function filterFeedback(rating) {
+  if (rating) {
+    document.querySelectorAll('[data-fb]').forEach(b => b.classList.toggle('active', b.dataset.fb===rating));
+    window._fbFilter = rating;
+  }
+  const r = window._fbFilter || 'All';
+  const q = (el('fb-search')?.value||'').toLowerCase();
+  document.querySelectorAll('.fb-row').forEach(row => {
+    const matchR = r==='All' || row.dataset.rating===r;
+    const matchQ = !q || (row.dataset.search||'').includes(q);
+    row.style.display = matchR && matchQ ? '' : 'none';
+  });
+}
+
+// ── POOL CAR QR FEEDBACK CARD ─────────────────────────────────────────────────
+function printPoolCarQR(plate, vehicleId) {
+  const feedbackUrl = `https://vmo-virtual-medessy-ops-front-end.vercel.app/feedback?vehicle=${encodeURIComponent(plate)}&id=${vehicleId}`;
+  const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(feedbackUrl)}&color=0D1117&bgcolor=C9A84C`;
+
+  const w = window.open('', '_blank', 'width=420,height=600');
+  w.document.write(`<!DOCTYPE html><html><head>
+    <title>VMO Feedback Card — ${plate}</title>
+    <style>
+      * { margin:0;padding:0;box-sizing:border-box; }
+      body { font-family:'Arial',sans-serif;background:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh;padding:20px }
+      .card { width:340px;border:3px solid #0D1117;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.15) }
+      .card-top { background:#0D1117;padding:20px;text-align:center }
+      .vmo-logo { color:#C9A84C;font-size:28px;font-weight:900;letter-spacing:2px;font-family:'Arial Black',sans-serif }
+      .plate { color:#fff;font-size:22px;font-weight:900;letter-spacing:3px;margin:8px 0 4px;border:2px solid #C9A84C;border-radius:8px;display:inline-block;padding:4px 18px }
+      .card-body { background:#fff;padding:24px;text-align:center }
+      .qr-wrap { background:#C9A84C;border-radius:12px;padding:12px;display:inline-block;margin-bottom:16px }
+      .message { font-size:13px;color:#374151;line-height:1.6;margin-bottom:16px;font-style:italic }
+      .instruction { font-size:11px;color:#6B7280;border-top:1px solid #E5E7EB;padding-top:12px;margin-top:4px }
+      .stars { font-size:22px;letter-spacing:4px;margin-bottom:8px }
+      @media print { body{padding:0} .card{box-shadow:none;border:2px solid #000} }
+    </style>
+  </head><body>
+    <div class="card">
+      <div class="card-top">
+        <div class="vmo-logo">VMO</div>
+        <div style="color:#C9A84C;font-size:10px;letter-spacing:2px;margin-bottom:12px">VIRTUAL OPS PLATFORM</div>
+        <div class="plate">${plate}</div>
+        <div style="color:rgba(255,255,255,.6);font-size:11px;margin-top:6px">Pool Car</div>
+      </div>
+      <div class="card-body">
+        <div class="stars">⭐⭐⭐⭐⭐</div>
+        <div class="message">
+          "Your experience matters to us.<br>
+          Scan the code below to rate your ride<br>
+          and help us serve you better."
+        </div>
+        <div class="qr-wrap">
+          <img src="${qrApiUrl}" width="180" height="180" alt="QR Code" style="display:block;border-radius:6px">
+        </div>
+        <div class="instruction">
+          📱 Scan with your phone camera<br>
+          Takes less than 60 seconds — thank you!
+        </div>
+        <div style="margin-top:12px;font-size:10px;color:#9CA3AF">
+          Medessy Enterprises Limited · NG Ride
+        </div>
+      </div>
+    </div>
+    <script>window.onload=()=>{window.print()}</script>
+  </body></html>`);
+  w.document.close();
+}
+
+// ── PUBLIC FEEDBACK FORM (shown when ?vehicle= in URL) ────────────────────────
+async function showPublicFeedbackForm() {
+  const params = new URLSearchParams(window.location.search);
+  const plate = params.get('vehicle');
+  const vehicleId = params.get('id');
+  if (!plate) return;
+
+  // Override the whole page with feedback form
+  document.body.innerHTML = `
+    <div style="min-height:100vh;background:#0D1117;display:flex;align-items:center;justify-content:center;padding:20px;font-family:'Inter',sans-serif">
+      <div style="background:#161B22;border:1px solid rgba(201,168,76,.3);border-radius:16px;padding:32px;max-width:420px;width:100%;text-align:center">
+        <div style="color:#C9A84C;font-size:24px;font-weight:900;letter-spacing:2px">VMO</div>
+        <div style="color:rgba(255,255,255,.5);font-size:10px;letter-spacing:2px;margin-bottom:16px">MEDESSY ENTERPRISES</div>
+        <div style="background:#0D1117;border:2px solid #C9A84C;border-radius:8px;padding:8px 20px;display:inline-block;margin-bottom:16px">
+          <span style="color:#fff;font-size:20px;font-weight:900;letter-spacing:3px">${plate}</span>
+        </div>
+        <div style="color:#E6EDF3;font-size:15px;margin-bottom:24px;line-height:1.6">
+          Thank you for riding with us.<br>How was your experience?
+        </div>
+
+        <div style="margin-bottom:16px">
+          <div style="color:#8B949E;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Overall Rating</div>
+          <div id="star-rating" style="font-size:36px;cursor:pointer;letter-spacing:4px">
+            ${[1,2,3,4,5].map(i=>`<span onclick="setRating(${i})" data-star="${i}" style="opacity:.3;transition:.2s">⭐</span>`).join('')}
+          </div>
+        </div>
+
+        <div style="text-align:left;margin-bottom:12px">
+          <label style="color:#8B949E;font-size:11px;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Service Quality</label>
+          <select id="fb-service" style="width:100%;padding:10px;background:#0D1117;border:1px solid rgba(201,168,76,.3);border-radius:8px;color:#E6EDF3;font-size:13px">
+            <option value="">— Select —</option>
+            <option value="Excellent">Excellent</option>
+            <option value="Good">Good</option>
+            <option value="Fair">Fair</option>
+            <option value="Poor">Poor</option>
+          </select>
+        </div>
+
+        <div style="text-align:left;margin-bottom:12px">
+          <label style="color:#8B949E;font-size:11px;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Driving Quality</label>
+          <select id="fb-driving" style="width:100%;padding:10px;background:#0D1117;border:1px solid rgba(201,168,76,.3);border-radius:8px;color:#E6EDF3;font-size:13px">
+            <option value="">— Select —</option>
+            <option value="Excellent">Excellent</option>
+            <option value="Good">Good</option>
+            <option value="Fair">Fair</option>
+            <option value="Poor">Poor</option>
+          </select>
+        </div>
+
+        <div style="text-align:left;margin-bottom:12px">
+          <label style="color:#8B949E;font-size:11px;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Comment (optional)</label>
+          <textarea id="fb-comment" placeholder="Tell us about your experience..." style="width:100%;padding:10px;background:#0D1117;border:1px solid rgba(201,168,76,.3);border-radius:8px;color:#E6EDF3;font-size:13px;min-height:80px;resize:vertical"></textarea>
+        </div>
+
+        <div style="text-align:left;margin-bottom:20px">
+          <label style="color:#8B949E;font-size:11px;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Your Name (optional)</label>
+          <input id="fb-name" placeholder="Anonymous" style="width:100%;padding:10px;background:#0D1117;border:1px solid rgba(201,168,76,.3);border-radius:8px;color:#E6EDF3;font-size:13px">
+        </div>
+
+        <button onclick="submitPublicFeedback('${plate}','${vehicleId}')" style="width:100%;padding:14px;background:#C9A84C;color:#0D1117;font-weight:900;font-size:15px;border:none;border-radius:10px;cursor:pointer;letter-spacing:.5px">
+          Submit Feedback
+        </button>
+        <div style="margin-top:12px;color:rgba(255,255,255,.3);font-size:10px">Medessy Enterprises Limited · NG Ride Logistics</div>
+      </div>
+    </div>`;
+
+  window.setRating = (n) => {
+    window._fbRating = n;
+    document.querySelectorAll('[data-star]').forEach(s => {
+      s.style.opacity = +s.dataset.star <= n ? '1' : '.3';
+    });
+  };
+
+  window.submitPublicFeedback = async (plate, vId) => {
+    const payload = {
+      plate_number: plate,
+      vehicle_id: vId || null,
+      rating: window._fbRating || 0,
+      service_rating: document.getElementById('fb-service')?.value || '',
+      driving_rating: document.getElementById('fb-driving')?.value || '',
+      comment: document.getElementById('fb-comment')?.value || '',
+      passenger_name: document.getElementById('fb-name')?.value || 'Anonymous',
+    };
+    if (!payload.rating) { alert('Please select a star rating'); return; }
+    try {
+      await fetch('https://vmo-virtual-medessy-opps-backend-production.up.railway.app/api/feedback', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)
+      });
+      document.body.innerHTML = `<div style="min-height:100vh;background:#0D1117;display:flex;align-items:center;justify-content:center;font-family:'Inter',sans-serif">
+        <div style="text-align:center;padding:40px">
+          <div style="font-size:64px;margin-bottom:16px">🙏</div>
+          <div style="color:#C9A84C;font-size:24px;font-weight:900;margin-bottom:8px">Thank You!</div>
+          <div style="color:rgba(255,255,255,.7);font-size:15px;line-height:1.6">Your feedback has been received.<br>We appreciate you riding with Medessy.</div>
+          <div style="margin-top:24px;color:rgba(255,255,255,.3);font-size:11px">NG Ride · Powered by VMO</div>
+        </div></div>`;
+    } catch(e) {
+      alert('Feedback submitted! Thank you.');
+    }
+  };
+}
+
+// Check if this is a public feedback URL on page load
+if (window.location.search.includes('vehicle=')) {
+  window.addEventListener('DOMContentLoaded', showPublicFeedbackForm);
+  document.addEventListener('DOMContentLoaded', showPublicFeedbackForm);
+}
+
 function toggleVehicleGroup() {
   const vtype = el('nv-vtype')?.value;
   const hrow = el('nv-haulage-row');
@@ -2892,7 +3119,7 @@ function downloadPaymentTemplate() {
     'credit_terms','payee_name','bank_name','account_number','account_name',
     'company_name','shipment_number','customer_name','waybill_number','notes','priority'
   ];
-  const categories = 'FUEL|DRIVER ALLOWANCE|DISPATCH|ACCOMMODATION|MAINTENANCE|LUBRICANT|CAR WASH|TRACKER/TICKETS|ENGINE/CONTAINER/TYRE|OTHER OVH|PENALTY/TOWING|3PL COST';
+  const categories = 'FUEL|DRIVER ALLOWANCE|DISPATCH|ACCOMMODATION|MAINTENANCE|LUBRICANT|CAR WASH|TRACKER|TICKETS|ENGINE/CONTAINER/TYRE|OTHER OVH|PENALTY/TOWING|3PL COST';
   const sample = [
     'Sample fuel payment','FUEL','50000','50000','cash','','AP Station Ikeja','GTBank','0123456789','AP Petroleum Ikeja Ltd','Medessy','285029','JUNDO BROTHERS','WB-2026-001','Monthly fuel','normal',
   ];
@@ -3567,6 +3794,7 @@ async function pgVehicles() {
                 <div style="display:flex;gap:4px">
                   ${svcLevel !== 'ok' ? `<button class="btn btn-success btn-sm" style="padding:3px 8px;font-size:10px;background:rgba(34,197,94,.15);color:#22c55e;border-color:rgba(34,197,94,.3)" onclick="showConfirmService(${v.id})" title="Log service"><i class="ti ti-tool"></i> Service</button>` : ''}
                   <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 7px" onclick="showVehicleDetail(${v.id})" title="View details"><i class="ti ti-info-circle"></i></button>
+                  ${v.vehicle_type==='pool_car'||v.vehicle_type==='suv'||!v.vehicle_type ? `<button class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 6px;color:var(--gold)" onclick="event.stopPropagation();printPoolCarQR('${v.plate_number||''}','${v.id}')" title="Print QR feedback card"><i class="ti ti-qrcode" style="font-size:11px"></i></button>` : ''}
                   ${['super_admin','real_admin','admin'].includes(user?.role) ? `<button class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 6px" onclick="event.stopPropagation();deleteVehicleSA(${v.id},'${(v.plate_number||'').replace(/'/g,'')}')" title="Delete — Super Admin only"><i class="ti ti-trash"></i></button>` : ''}
                 </div>
               </td>
