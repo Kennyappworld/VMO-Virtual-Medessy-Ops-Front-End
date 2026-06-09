@@ -3910,27 +3910,48 @@ async function pgDrivers() {
   `);
   const data = await api('GET', '/api/drivers');
   html('page-content', `
-    ${data.map(d => {
-      const days = daysLeft(d.license_expiry);
-      const urgent = days !== null && days <= 30;
-      return `<div class="list-item">
-        <div class="list-dot ${urgent&&days<=0?'red':urgent?'amber':'green'}" style="background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-weight:800;font-size:12px">
-          ${avatar(d.full_name||d.name)}
-        </div>
-        <div class="list-body">
-          <div class="list-title">${d.full_name||d.name}</div>
-          <div class="list-sub">${d.phone||'—'} · ${d.depot}</div>
-          <div class="list-sub">${d.bank_name||''} ${d.account_number?'· '+d.account_number:''}</div>
-          ${urgent ? `<div style="margin-top:5px"><span class="badge badge-${days<=0?'declined':'pending'} ${days<=7?'blink':''}">${days<=0?'License EXPIRED':'License expires in '+days+'d'}</span></div>` : ''}
-        </div>
-        <div class="list-meta" style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
-          <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px" onclick="showDriverDetail(${d.id})" title="View details"><i class="ti ti-eye"></i></button>
-          ${['super_admin','real_admin','admin'].includes(user?.role) ? `<button class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 6px" onclick="event.stopPropagation();deleteDriverSA(${d.id},'${(d.full_name||d.name||'').replace(/'/g,'')}')" title="Delete — Super Admin only"><i class="ti ti-trash"></i></button>` : ''}
-        </div>
-      </div>`;
-    }).join('') || '<div class="empty-state"><div class="empty-icon"><i class="ti ti-id-badge"></i></div><div class="empty-title">No drivers yet</div></div>'}
+    <div style="overflow-x:auto">
+      <table class="data-table">
+        <thead><tr>
+          <th>Driver</th><th>Phone</th><th>Depot</th><th>Bank</th>
+          <th>Account No.</th><th>Licence No.</th><th>Licence Expiry</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody>
+        ${data.map(d => {
+          const days = daysLeft(d.license_expiry);
+          const expired = days !== null && days <= 0;
+          const expiring = days !== null && days > 0 && days <= 30;
+          const statusColor = expired ? 'var(--red)' : expiring ? 'var(--amber)' : 'var(--green)';
+          return `<tr style="cursor:pointer" onclick="showDriverDetail(${d.id})">
+            <td>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:11px;flex-shrink:0">${avatar(d.full_name||d.name)}</div>
+                <strong style="font-size:13px">${sanitise(d.full_name||d.name||'—')}</strong>
+              </div>
+            </td>
+            <td style="font-size:12px">${sanitise(d.phone||'—')}</td>
+            <td style="font-size:12px">${sanitise(d.depot||'—')}</td>
+            <td style="font-size:12px">${sanitise(d.bank_name||'—')}</td>
+            <td style="font-size:12px;font-family:monospace">${sanitise(d.account_number||'—')}</td>
+            <td style="font-size:12px;font-family:monospace">${sanitise(d.license_number||'—')}</td>
+            <td style="font-size:12px;white-space:nowrap">
+              ${d.license_expiry ? `<span style="color:${statusColor};font-weight:600">${fmtDate(d.license_expiry)}</span>` : '—'}
+              ${expired ? `<span class="badge badge-declined" style="font-size:9px;margin-left:4px">EXPIRED</span>` :
+                expiring ? `<span class="badge badge-pending" style="font-size:9px;margin-left:4px">${days}d</span>` : ''}
+            </td>
+            <td><span class="badge ${d.active===false?'badge-declined':'badge-approved'}" style="font-size:10px">${d.active===false?'Inactive':'Active'}</span></td>
+            <td style="text-align:right;white-space:nowrap">
+              <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px" onclick="event.stopPropagation();showDriverDetail(${d.id})"><i class="ti ti-eye"></i></button>
+              ${['super_admin','real_admin','admin'].includes(user?.role) ? `<button class="btn btn-danger btn-sm" style="font-size:10px;padding:3px 6px" onclick="event.stopPropagation();deleteDriverSA(${d.id},'${(d.full_name||d.name||'Driver').replace(/'/g,'')}')"><i class="ti ti-trash"></i></button>` : ''}
+            </td>
+          </tr>`;
+        }).join('') || `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">No drivers yet</td></tr>`}
+        </tbody>
+      </table>
+    </div>
   `);
 }
+
 function showNewDriver() {
   showModal('Add Driver', `
     <div class="form-row">
