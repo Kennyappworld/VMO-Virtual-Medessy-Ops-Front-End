@@ -10988,7 +10988,191 @@ async function fetchMonthlyReport() {
         <tbody>${vRows||'<tr><td colspan="10" style="padding:40px;text-align:center;color:var(--text3)">No data</td></tr>'}</tbody>
       </table>
     </div>
+
+    <!-- DRIVER RATINGS SECTION -->
+    <div id="driver-ratings-section" style="margin-top:24px"></div>
   `);
+
+  // Load and render driver ratings asynchronously
+  renderDriverRatings(month, year, monthNames[reportData.month-1]);
+}
+
+async function renderDriverRatings(month, year, monthName) {
+  const section = el('driver-ratings-section');
+  if (!section) return;
+  section.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text3)"><i class="ti ti-loader" style="animation:spin .8s linear infinite"></i> Loading driver ratings...</div>';
+
+  try {
+    // Fetch all feedback
+    const allFeedback = await api('GET', '/api/feedback').catch(()=>[]);
+
+    // Filter for selected month
+    const monthFeedback = allFeedback.filter(f => {
+      if (!f.created_at) return false;
+      const d = new Date(f.created_at);
+      return d.getMonth()+1 === +month && d.getFullYear() === +year;
+    });
+
+    // Group by driver (using driver_name from feedback or plate)
+    const driverMap = {};
+    monthFeedback.forEach(f => {
+      const key = f.driver_name || f.plate_number || 'Unknown';
+      if (!driverMap[key]) driverMap[key] = { name: key, plate: f.plate_number||'', ratings: [], total: 0, count: 0 };
+      if (f.rating) { driverMap[key].ratings.push(+f.rating); driverMap[key].total += +f.rating; driverMap[key].count++; }
+    });
+
+    const drivers = Object.values(driverMap).filter(d => d.count > 0).map(d => ({
+      ...d, avg: (d.total / d.count).toFixed(1)
+    })).sort((a,b) => b.avg - a.avg);
+
+    // Top 2 and bottom 2
+    const top2 = drivers.slice(0, 2);
+    const bottom2 = drivers.slice(-2).reverse().filter(d => +d.avg <= 3.5);
+
+    // Check for 3-consecutive-month low performers
+    const flagged = await checkConsecutiveLowPerformers(allFeedback, +month, +year);
+
+    if (!drivers.length) {
+      section.innerHTML = `
+        <div style="font-size:12px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">⭐ Driver Ratings — ${monthName} ${year}</div>
+        <div style="background:var(--bg3);border-radius:10px;padding:20px;text-align:center;color:var(--text3);font-size:13px">
+          No feedback received for this month yet. QR codes on pool cars will generate ratings.
+        </div>`;
+      return;
+    }
+
+    const starBar = (avg) => {
+      const full = Math.floor(avg);
+      const half = avg - full >= 0.5;
+      return '⭐'.repeat(full) + (half ? '✨' : '') + '☆'.repeat(5 - full - (half?1:0));
+    };
+
+    const driverCard = (d, rank, type) => `
+      <div style="background:${type==='top'?'rgba(16,185,129,.08)':'rgba(239,68,68,.08)'};border:1px solid ${type==='top'?'rgba(16,185,129,.25)':'rgba(239,68,68,.25)'};border-radius:10px;padding:14px;display:flex;align-items:center;gap:12px">
+        <div style="width:40px;height:40px;border-radius:50%;background:${type==='top'?'var(--green)':'var(--red)'};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:16px;flex-shrink:0">${rank}</div>
+        <div style="flex:1">
+          <div style="font-weight:700;font-size:13px;color:var(--text)">${sanitise(d.name)}</div>
+          <div style="font-size:11px;color:var(--text3)">${d.plate ? sanitise(d.plate) : ''} · ${d.count} review${d.count!==1?'s':''}</div>
+          <div style="font-size:13px;margin-top:3px">${starBar(+d.avg)}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:24px;font-weight:900;color:${type==='top'?'var(--green)':'var(--red)'};font-family:'Fraunces',serif">${d.avg}</div>
+          <div style="font-size:9px;color:var(--text3);text-transform:uppercase">avg rating</div>
+        </div>
+      </div>`;
+
+    section.innerHTML = `
+      <div style="font-size:12px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">⭐ Driver Performance — ${monthName} ${year}</div>
+
+      ${top2.length ? `
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🏆 Top Rated Drivers</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          ${top2.map((d,i) => driverCard(d, i+1, 'top')).join('')}
+        </div>
+      </div>` : ''}
+
+      ${bottom2.length ? `
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">⚠ Needs Improvement</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          ${bottom2.map((d,i) => driverCard(d, i+1, 'low')).join('')}
+        </div>
+      </div>` : ''}
+
+      ${flagged.length ? `
+      <div style="background:rgba(239,68,68,.1);border:2px solid rgba(239,68,68,.4);border-radius:10px;padding:14px;margin-bottom:14px">
+        <div style="font-size:12px;font-weight:800;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">
+          🚨 Performance Flag — Low Ratings for 3+ Consecutive Months
+        </div>
+        ${flagged.map(d => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px;background:rgba(239,68,68,.08);border-radius:8px;margin-bottom:6px">
+            <div>
+              <div style="font-weight:700;font-size:13px;color:var(--text)">${sanitise(d.name)}</div>
+              <div style="font-size:11px;color:var(--text3)">Avg ratings: ${d.monthlyAvgs.map(m=>`${m.month}: ${m.avg}⭐`).join(' → ')}</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:11px;font-weight:700;color:var(--red)">${d.consecutiveMonths} consecutive months</div>
+              <div style="font-size:10px;color:var(--text3)">below 3.5 average</div>
+            </div>
+          </div>`).join('')}
+        <div style="font-size:11px;color:rgba(239,68,68,.8);margin-top:8px;font-style:italic">
+          Flagged drivers require HR review. Persistent low ratings may affect employment assessment.
+        </div>
+      </div>` : ''}
+
+      <!-- All drivers table -->
+      <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">All Driver Ratings This Month</div>
+      <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead><tr>
+            <th>Rank</th><th>Driver</th><th>Vehicle</th><th>Reviews</th>
+            <th>Avg Rating</th><th>Service</th><th>Driving</th>
+          </tr></thead>
+          <tbody>
+          ${drivers.map((d,i) => {
+            const monthFb = monthFeedback.filter(f => (f.driver_name||f.plate_number||'Unknown')===d.name);
+            const svcRatings = monthFb.map(f=>f.service_rating).filter(Boolean);
+            const drvRatings = monthFb.map(f=>f.driving_rating).filter(Boolean);
+            const topSvc = svcRatings.length ? svcRatings.sort((a,b)=>svcRatings.filter(v=>v===b).length-svcRatings.filter(v=>v===a).length)[0] : '—';
+            const topDrv = drvRatings.length ? drvRatings.sort((a,b)=>drvRatings.filter(v=>v===b).length-drvRatings.filter(v=>v===a).length)[0] : '—';
+            const col = +d.avg >= 4.5 ? 'var(--green)' : +d.avg >= 3.5 ? 'var(--amber)' : 'var(--red)';
+            return `<tr>
+              <td style="text-align:center;font-weight:700">${i+1}</td>
+              <td><strong>${sanitise(d.name)}</strong></td>
+              <td style="font-size:11px;font-family:monospace">${sanitise(d.plate||'—')}</td>
+              <td style="text-align:center">${d.count}</td>
+              <td style="text-align:center;font-weight:800;color:${col};font-size:15px">${d.avg} ⭐</td>
+              <td style="font-size:11px"><span class="badge badge-${topSvc==='Excellent'?'approved':topSvc==='Poor'?'declined':'pending'}" style="font-size:9px">${topSvc}</span></td>
+              <td style="font-size:11px"><span class="badge badge-${topDrv==='Excellent'?'approved':topDrv==='Poor'?'declined':'pending'}" style="font-size:9px">${topDrv}</span></td>
+            </tr>`;
+          }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch(e) {
+    if (section) section.innerHTML = `<div style="color:var(--text3);font-size:12px;padding:16px">Driver ratings unavailable: ${e.message}</div>`;
+  }
+}
+
+async function checkConsecutiveLowPerformers(allFeedback, currentMonth, currentYear) {
+  // Look at last 3 months including current
+  const months = [];
+  for (let i=2; i>=0; i--) {
+    let m = currentMonth - i;
+    let y = currentYear;
+    if (m <= 0) { m += 12; y -= 1; }
+    months.push({month: m, year: y, label: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1]+' '+y});
+  }
+
+  // Build per-driver, per-month averages
+  const driverMonthMap = {};
+  allFeedback.forEach(f => {
+    if (!f.created_at || !f.rating) return;
+    const d = new Date(f.created_at);
+    const m = d.getMonth()+1, y = d.getFullYear();
+    const relevant = months.find(mo => mo.month===m && mo.year===y);
+    if (!relevant) return;
+    const key = f.driver_name || f.plate_number || 'Unknown';
+    if (!driverMonthMap[key]) driverMonthMap[key] = {};
+    if (!driverMonthMap[key][relevant.label]) driverMonthMap[key][relevant.label] = {total:0, count:0};
+    driverMonthMap[key][relevant.label].total += +f.rating;
+    driverMonthMap[key][relevant.label].count++;
+  });
+
+  const flagged = [];
+  Object.entries(driverMonthMap).forEach(([name, monthData]) => {
+    const monthlyAvgs = months.map(mo => {
+      const md = monthData[mo.label];
+      return md && md.count > 0 ? {month: mo.label, avg: (md.total/md.count).toFixed(1)} : null;
+    });
+    // Only flag if data exists for all 3 months AND all averages are <= 3.5
+    if (monthlyAvgs.every(m => m !== null) && monthlyAvgs.every(m => +m.avg <= 3.5)) {
+      flagged.push({ name, monthlyAvgs, consecutiveMonths: 3 });
+    }
+  });
+  return flagged;
 }
 
 function exportMonthlyCSV() {
