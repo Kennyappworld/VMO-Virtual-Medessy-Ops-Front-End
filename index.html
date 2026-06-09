@@ -2470,7 +2470,7 @@ async function submitTripCSV() {
 // ── DRIVER BULK UPLOAD ─────────────────────────────────────────────────────
 function downloadDriverTemplate() {
   const headers = [
-    'full_name','phone','email','depot','license_number','license_expiry',
+    'full_name','phone','email','base_location','license_number','license_class','license_expiry',
     'bank_name','account_number','account_name',
     'company_name','vehicle_plate','notes'
   ];
@@ -3959,8 +3959,21 @@ function showNewDriver() {
       <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="nd-phone" placeholder="0801234567"></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">License No.</label><input class="form-input" id="nd-lic" placeholder="LAG-12345"></div>
+      <div class="form-group"><label class="form-label">Licence No.</label><input class="form-input" id="nd-lic" placeholder="LAG-12345"></div>
       <div class="form-group"><label class="form-label">Expiry</label><input class="form-input" type="date" id="nd-licexp"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Licence Class</label>
+        <select class="form-input" id="nd-lclass">
+          <option value="">— Select class —</option>
+          <option value="A">Class A — Motorcycle</option>
+          <option value="B">Class B — Light vehicles (cars, SUVs)</option>
+          <option value="C">Class C — Heavy duty / trucks</option>
+          <option value="D">Class D — Articulated trucks</option>
+          <option value="E">Class E — Special purpose</option>
+        </select></div>
+      <div class="form-group"><label class="form-label">Base Location</label>
+        <input class="form-input" id="nd-depot" placeholder="e.g. Lagos, Kano, Onitsha"></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Bank</label><input class="form-input" id="nd-bank" placeholder="GTBank"></div>
@@ -3977,7 +3990,8 @@ function showNewDriver() {
     </div>`);
 }
 async function submitDriver() {
-  try { clearCache(); await api('POST', '/api/drivers', { full_name: el('nd-name').value, phone: el('nd-phone').value, license_number: el('nd-lic').value, license_expiry: el('nd-licexp').value||null, bank_name: el('nd-bank').value, account_number: el('nd-acct').value, account_name: el('nd-aname').value, depot: el('nd-depot').value }); closeModal(); navigate('drivers'); } catch(e) { alert(e.message); }
+  try { clearCache(); await api('POST', '/api/drivers', { full_name: el('nd-name').value, phone: el('nd-phone').value, license_number: el('nd-lic').value,
+      license_class: el('nd-lclass')?.value||'', license_expiry: el('nd-licexp').value||null, bank_name: el('nd-bank').value, account_number: el('nd-acct').value, account_name: el('nd-aname').value, depot: el('nd-depot').value }); closeModal(); navigate('drivers'); } catch(e) { alert(e.message); }
 }
 
 // ── COMPLIANCE ────────────────────────────────────────────────────────────────
@@ -4057,7 +4071,7 @@ async function pgCompliance() {
       ${drv.length ? `
       <div style="overflow-x:auto">
         <table class="data-table">
-          <thead><tr><th>Driver</th><th>Phone</th><th>Depot</th><th>Licence No.</th><th>Expiry</th><th>Status</th></tr></thead>
+          <thead><tr><th>Driver</th><th>Phone</th><th>Base Location</th><th>Licence No.</th><th>Licence Class</th><th>Expiry</th><th>Status</th></tr></thead>
           <tbody>
           ${drv.map(d => {
             const days = daysLeft(d.license_expiry);
@@ -4067,6 +4081,7 @@ async function pgCompliance() {
               <td style="font-size:12px">${sanitise(d.phone||'—')}</td>
               <td style="font-size:12px">${sanitise(d.depot||'—')}</td>
               <td style="font-size:12px;font-family:monospace">${sanitise(d.license_number||'—')}</td>
+              <td style="font-size:12px"><span class="badge badge-pending" style="font-size:10px">${sanitise(d.license_class||d.licence_class||'—')}</span></td>
               <td style="font-size:12px;color:${expired?'var(--red)':'var(--amber)'};font-weight:600">${fmtDate(d.license_expiry)}</td>
               <td><span class="badge badge-${expired?'declined':'pending'}" style="font-size:10px">${expired?'EXPIRED':days+'d left'}</span></td>
             </tr>`;
