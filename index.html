@@ -1989,7 +1989,7 @@ async function pgFuel() {
         </thead>
         <tbody>
           ${data.map((f,i) => `
-            <tr class="fuel-row" data-fstatus="${f.status}"
+            <tr class="fuel-row" data-fstatus="${f.status}" data-amount="${f.amount||0}" data-qty="${f.quantity||0}"
                 data-search="${[f.ref_number,f.plate_number,f.driver_name,f.fuel_type,f.station_name,f.status].join(' ').toLowerCase()}"
                 style="border-bottom:1px solid var(--border);background:${i%2===0?'transparent':'rgba(255,255,255,.02)'};transition:.1s"
                 onmouseover="this.style.background='rgba(79,142,247,.06)'" onmouseout="this.style.background='${i%2===0?'transparent':'rgba(255,255,255,.02)'}'">
@@ -2022,9 +2022,16 @@ async function pgFuel() {
         ${data.length ? `
         <tfoot>
           <tr style="background:var(--bg3);border-top:2px solid var(--border)">
-            <td colspan="7" style="padding:9px 12px;font-weight:700;color:var(--text2);font-size:12px">TOTAL (${data.length} records)</td>
-            <td style="padding:9px 12px;text-align:right;font-weight:800;color:var(--accent);font-size:13px">${fmt(totals.amount)}</td>
-            <td colspan="2"></td>
+            <td colspan="7" style="padding:9px 12px;font-weight:700;color:var(--text2);font-size:12px">
+              <span class="fuel-total-count">ALL — ${data.length} records</span>
+            </td>
+            <td style="padding:9px 12px;text-align:right;font-weight:800;color:var(--accent);font-size:13px">
+              <span class="fuel-total-amount">${fmt(totals.amount)}</span>
+            </td>
+            <td style="padding:9px 12px;text-align:right;font-weight:700;color:var(--text2);font-size:12px">
+              <span class="fuel-total-qty">${totals.qty ? totals.qty.toLocaleString('en-NG',{maximumFractionDigits:1})+' L' : ''}</span>
+            </td>
+            <td></td>
           </tr>
         </tfoot>`:'' }
       </table>
@@ -2039,11 +2046,30 @@ function filterFuelTable(status) {
   }
   const s = window._fuelFilter || 'All';
   const q = (el('fuel-search')?.value || '').toLowerCase();
+  let visibleCount = 0, visibleAmount = 0, visibleQty = 0;
   document.querySelectorAll('.fuel-row').forEach(row => {
     const matchStatus = s === 'All' || row.dataset.fstatus === s;
     const matchSearch = !q || (row.dataset.search || '').includes(q);
-    row.style.display = matchStatus && matchSearch ? '' : 'none';
+    const show = matchStatus && matchSearch;
+    row.style.display = show ? '' : 'none';
+    if (show) {
+      visibleCount++;
+      visibleAmount += parseFloat(row.dataset.amount || 0);
+      visibleQty += parseFloat(row.dataset.qty || 0);
+    }
   });
+  // Update live totals
+  const totalRow = document.getElementById('fuel-total-row');
+  if (totalRow) {
+    totalRow.querySelector('.fuel-total-count').textContent = `${s === 'All' ? 'ALL' : s.toUpperCase()} — ${visibleCount} record${visibleCount!==1?'s':''}`;
+    totalRow.querySelector('.fuel-total-amount').textContent = '₦' + visibleAmount.toLocaleString('en-NG', {maximumFractionDigits:0});
+    totalRow.querySelector('.fuel-total-qty').textContent = visibleQty.toLocaleString('en-NG', {maximumFractionDigits:1}) + ' L';
+  }
+  // Update stat cards
+  if (s !== 'All') {
+    const statAmt = document.getElementById('fuel-stat-amount');
+    if (statAmt) statAmt.textContent = '₦' + (visibleAmount/1000000).toFixed(2) + 'M';
+  }
 }
 async function approveFuel(id) {
   if (!confirm('Approve fuel request?')) return;
@@ -4514,6 +4540,190 @@ async function submitImprest() {
   } catch(e) { alert(e.message); }
 }
 
+
+// ── PETROL STATION IMPREST ────────────────────────────────────────────────────
+async function showPetrolStationImprest(vendorId, vendorName) {
+  // Load or create imprest account linked to this petrol station
+  const accounts = await api('GET','/api/imprest').catch(()=>[]);
+  const linked = accounts.find(a => a.vendor_id === vendorId || a.name === vendorName + ' — Fuel Float');
+  
+  if (!linked) {
+    // Prompt to create one
+    if (confirm(`No imprest account found for ${vendorName}. Create one now?`)) {
+      await createPetrolStationImprest(vendorId, vendorName);
+    }
+    return;
+  }
+  showPetrolImprestDetail(linked, vendorName);
+}
+
+async function createPetrolStationImprest(vendorId, vendorName) {
+  try {
+    const r = await api('POST','/api/imprest', {
+      name: vendorName + ' — Fuel Float',
+      holder_type: 'unit',
+      holder_name: vendorName,
+      vendor_id: vendorId,
+      dedicated_category: 'FUEL',
+      balance: 0,
+      original_balance: 0,
+      status: 'active',
+    });
+    showToast('Imprest account created for ' + vendorName, 'success');
+    showPetrolImprestDetail(r, vendorName);
+  } catch(e) { alert(e.message||'Failed to create imprest'); }
+}
+
+async function showPetrolImprestDetail(account, vendorName) {
+  const [history, fuelLogs] = await Promise.all([
+    api('GET', `/api/imprest/${account.id}/history`).catch(()=>[]),
+    api('GET', `/api/fuel?vendor_id=${account.vendor_id||''}`).catch(()=>[]),
+  ]);
+
+  const rate = account.current_rate || 0;
+  const totalIssued = fuelLogs.filter(f=>f.status==='paid').reduce((s,f)=>s+(+f.quantity||0),0);
+  const totalIssuedAmt = fuelLogs.filter(f=>f.status==='paid').reduce((s,f)=>s+(+f.amount||0),0);
+
+  const isSuperAdmin = ['super_admin','real_admin','admin'].includes(user?.role);
+  const canEdit = isSuperAdmin;
+
+  showModal(`${vendorName} — Fuel Float Account`, `
+    <!-- Balance + Rate -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
+      <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center">
+        <div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:4px">Available Balance</div>
+        <div style="font-size:20px;font-weight:900;color:${+account.balance<50000?'var(--red)':+account.balance<200000?'var(--amber)':'var(--green)'};font-family:'Fraunces',serif">${fmt(account.balance)}</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center">
+        <div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:4px">Current Rate/L</div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:4px">
+          <div style="font-size:18px;font-weight:800;color:var(--gold);font-family:'Fraunces',serif" id="ps-rate-display">₦${Number(rate).toLocaleString()}</div>
+          ${canEdit ? `<button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:10px" onclick="editPetrolRate(${account.id},${rate})"><i class="ti ti-edit" style="font-size:10px"></i></button>` : ''}
+        </div>
+      </div>
+      <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center">
+        <div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:4px">Total Issued</div>
+        <div style="font-size:18px;font-weight:800;color:var(--text);font-family:'Fraunces',serif">${totalIssued.toLocaleString()}L</div>
+        <div style="font-size:10px;color:var(--text3)">${fmt(totalIssuedAmt)}</div>
+      </div>
+    </div>
+
+    <!-- Top up + Actions -->
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      ${canEdit ? `<button class="btn btn-primary btn-sm" onclick="topUpPetrolImprest(${account.id},'${sanitise(vendorName)}')"><i class="ti ti-plus"></i> Top Up</button>` : ''}
+      <button class="btn btn-ghost btn-sm" onclick="navigate('fuel')"><i class="ti ti-gas-station"></i> View Fuel Log</button>
+    </div>
+
+    <!-- Issuance Log -->
+    <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Diesel / Petrol Issuance Log</div>
+    <div style="max-height:280px;overflow-y:auto">
+      ${fuelLogs.length ? `
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="background:var(--bg3)">
+          <th style="padding:6px 8px;text-align:left;color:var(--text3);font-size:10px">Date</th>
+          <th style="padding:6px 8px;text-align:left;color:var(--text3);font-size:10px">Driver</th>
+          <th style="padding:6px 8px;text-align:left;color:var(--text3);font-size:10px">Vehicle</th>
+          <th style="padding:6px 8px;text-align:right;color:var(--text3);font-size:10px">Qty (L)</th>
+          <th style="padding:6px 8px;text-align:right;color:var(--text3);font-size:10px">Rate</th>
+          <th style="padding:6px 8px;text-align:right;color:var(--text3);font-size:10px">Amount</th>
+          <th style="padding:6px 8px;text-align:left;color:var(--text3);font-size:10px">Approver</th>
+          <th style="padding:6px 8px;text-align:left;color:var(--text3);font-size:10px">Status</th>
+        </tr></thead>
+        <tbody>
+        ${fuelLogs.map(f=>`<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 8px;white-space:nowrap">${f.created_at?new Date(f.created_at).toLocaleDateString('en-GB'):'—'}</td>
+          <td style="padding:6px 8px">${sanitise(f.driver_name||'—')}</td>
+          <td style="padding:6px 8px"><strong>${sanitise(f.plate_number||'—')}</strong></td>
+          <td style="padding:6px 8px;text-align:right;font-weight:700">${(+f.quantity||0).toLocaleString()}</td>
+          <td style="padding:6px 8px;text-align:right">₦${(+f.price_per_litre||0).toLocaleString()}</td>
+          <td style="padding:6px 8px;text-align:right;font-weight:700;color:var(--amber)">₦${(+f.amount||0).toLocaleString()}</td>
+          <td style="padding:6px 8px;font-size:10px">${sanitise(f.approved_by_name||'—')}</td>
+          <td style="padding:6px 8px"><span class="badge badge-${f.status==='approved'||f.status==='paid'?'approved':f.status==='declined'?'declined':'pending'}" style="font-size:9px">${f.status||'—'}</span></td>
+        </tr>`).join('')}
+        </tbody>
+      </table>` : '<div style="color:var(--text3);font-size:12px;padding:20px;text-align:center">No fuel issuances recorded yet</div>'}
+    </div>
+
+    <!-- Funding History -->
+    <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px">Funding History</div>
+    <div style="max-height:150px;overflow-y:auto">
+      ${history.filter(h=>h.type==='fund').length ? history.filter(h=>h.type==='fund').map(h=>`
+        <div style="display:flex;justify-content:space-between;padding:8px;background:var(--bg3);border-radius:8px;margin-bottom:6px;font-size:12px">
+          <div>
+            <div style="font-weight:700;color:var(--green)">${fmt(h.amount)}</div>
+            <div style="font-size:10px;color:var(--text3)">${h.created_at?new Date(h.created_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}):'—'} · ${sanitise(h.created_by_name||'—')}</div>
+            ${h.notes?`<div style="font-size:10px;color:var(--text2)">${sanitise(h.notes)}</div>`:''}
+          </div>
+          ${canEdit && h.created_at && (Date.now()-new Date(h.created_at).getTime()) < 5*24*60*60*1000 ? `
+          <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="editFundingEntry(${account.id},${h.id},${h.amount})"><i class="ti ti-edit" style="font-size:10px"></i></button>` : ''}
+        </div>`).join('') : '<div style="color:var(--text3);font-size:12px;padding:10px">No funding history</div>'}
+    </div>
+
+    <button class="btn btn-ghost btn-block" style="margin-top:12px" onclick="closeModal()">Close</button>
+  `, 'lg');
+}
+
+async function topUpPetrolImprest(accountId, vendorName) {
+  closeModal();
+  setTimeout(() => {
+    showModal('Top Up — ' + vendorName, `
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Amount (₦) *</label>
+          <input class="form-input" id="tu-amount" type="number" placeholder="e.g. 500000"></div>
+        <div class="form-group"><label class="form-label">Funding Date</label>
+          <input class="form-input" type="date" id="tu-date" value="${new Date().toISOString().slice(0,10)}"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Current Diesel/Petrol Rate (₦/L)</label>
+        <input class="form-input" id="tu-rate" type="number" placeholder="e.g. 1700"></div>
+      <div class="form-group"><label class="form-label">Notes</label>
+        <input class="form-input" id="tu-notes" placeholder="e.g. June funding — AP Station"></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-primary btn-block" onclick="submitTopUp(${accountId})">Fund Account</button>
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      </div>
+    `);
+  }, 200);
+}
+
+async function submitTopUp(accountId) {
+  const amount = parseFloat(el('tu-amount')?.value || 0);
+  const rate = parseFloat(el('tu-rate')?.value || 0);
+  const notes = el('tu-notes')?.value || '';
+  const date = el('tu-date')?.value;
+  if (!amount) { alert('Enter amount'); return; }
+  try {
+    await api('POST', `/api/imprest/${accountId}/fund`, { amount, rate, notes, fund_date: date });
+    if (rate) await api('PATCH', `/api/imprest/${accountId}`, { current_rate: rate });
+    closeModal();
+    showToast('Account funded successfully', 'success');
+    clearCache();
+    navigate('imprest');
+  } catch(e) { alert(e.message||'Failed to fund'); }
+}
+
+async function editPetrolRate(accountId, currentRate) {
+  const newRate = prompt('Enter new diesel/petrol rate (₦/L):', currentRate);
+  if (!newRate || isNaN(newRate)) return;
+  try {
+    await api('PATCH', `/api/imprest/${accountId}`, { current_rate: parseFloat(newRate) });
+    showToast('Rate updated','success');
+    clearCache();
+    const rateDisplay = document.getElementById('ps-rate-display');
+    if (rateDisplay) rateDisplay.textContent = '₦' + Number(newRate).toLocaleString();
+  } catch(e) { alert(e.message||'Failed to update rate'); }
+}
+
+async function editFundingEntry(accountId, historyId, currentAmount) {
+  const newAmount = prompt('Edit funding amount (₦) — editable within 5 days only:', currentAmount);
+  if (!newAmount || isNaN(newAmount)) return;
+  try {
+    await api('PATCH', `/api/imprest/history/${historyId}`, { amount: parseFloat(newAmount) });
+    showToast('Funding entry updated','success');
+    clearCache();
+    navigate('imprest');
+  } catch(e) { alert(e.message||'Failed to edit. May be outside 5-day window.'); }
+}
+
 function showFundImprest(id, name) {
   showModal(`Fund — ${name}`, `
     <div class="form-row">
@@ -6759,6 +6969,7 @@ function renderVendorTable(vendors) {
     <td><span class="badge ${v.status==='active'?'badge-approved':'badge-declined'}" style="font-size:10px">${v.status||'active'}</span></td>
     <td>
       <button class="btn btn-ghost btn-sm" onclick="showVendorDetail(${v.id})" title="View details"><i class="ti ti-eye"></i></button>
+      ${v.vendor_type==='petrol_station' ? `<button class="btn btn-ghost btn-sm" style="color:var(--gold)" onclick="showPetrolStationImprest(${v.id},'${(v.company_name||v.name||'').replace(/'/g,'')}')" title="Fuel Float Account"><i class="ti ti-gas-station"></i></button>` : ''}
       ${['super_admin','real_admin','admin'].includes(user?.role) ? `<button class="btn btn-ghost btn-sm" onclick="editVendor(${v.id})" title="Edit vendor (Super Admin only)"><i class="ti ti-edit"></i></button>` : ''}
     </td>
   </tr>`).join('')}
