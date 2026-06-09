@@ -2693,26 +2693,39 @@ async function submitVehicleCSV() {
 
 // ── CLIENT FEEDBACK PAGE ─────────────────────────────────────────────────────
 async function pgFeedback() {
-  html('topbar-btn', '');
-  const feedbacks = await api('GET','/api/feedback').catch(()=>[]);
+  // Show export button in the topbar
+  html('topbar-btn', `
+    <button class="btn btn-ghost btn-sm" onclick="exportFeedbackCSV()">
+      <i class="ti ti-download"></i> Export CSV
+    </button>
+  `);
+
+  const feedbacks = await api('GET', '/api/feedback').catch(() => []);
   window._feedbacks = feedbacks;
 
-  const avg = feedbacks.length ? (feedbacks.reduce((s,f)=>s+(+f.rating||0),0)/feedbacks.length).toFixed(1) : '—';
-  const byRating = [5,4,3,2,1].map(r => feedbacks.filter(f=>(+f.rating||0)===r).length);
+  // Headline stats
+  const avg = feedbacks.length
+    ? (feedbacks.reduce((s, f) => s + (+f.rating || 0), 0) / feedbacks.length).toFixed(1)
+    : '—';
+  const byRating = [5, 4, 3, 2, 1].map(r => feedbacks.filter(f => (+f.rating || 0) === r).length);
 
   html('page-content', `
-    <!-- Summary -->
-    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
       <div class="stat-card stat-gold"><div class="stat-label">Avg Rating</div><div class="stat-value" style="font-size:26px">${avg} ⭐</div></div>
-      <div class="stat-card stat-green"><div class="stat-label">Total Feedback</div><div class="stat-value" style="font-size:22px">${feedbacks.length}</div></div>
+      <div class="stat-card stat-green"><div class="stat-label">Total Responses</div><div class="stat-value" style="font-size:22px">${feedbacks.length}</div></div>
       <div class="stat-card stat-blue"><div class="stat-label">5-Star</div><div class="stat-value" style="font-size:22px">${byRating[0]}</div></div>
-      <div class="stat-card stat-red"><div class="stat-label">1-2 Star</div><div class="stat-value" style="font-size:22px">${byRating[3]+byRating[4]}</div></div>
+      <div class="stat-card stat-red"><div class="stat-label">1–2 Star</div><div class="stat-value" style="font-size:22px">${byRating[3] + byRating[4]}</div></div>
     </div>
 
-    <!-- Filter -->
-    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-      ${['All','5','4','3','2','1'].map(r=>`<button onclick="filterFeedback('${r}')" data-fb="${r}" class="group-chip ${r==='All'?'active':''}">${r==='All'?'All':r+'⭐'}</button>`).join('')}
-      <input id="fb-search" placeholder="Search vehicle or driver..." oninput="filterFeedback()" class="form-input" style="flex:1;min-width:180px;height:32px;padding:4px 10px;font-size:12px">
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+      ${['All','5','4','3','2','1'].map(r => `
+        <button onclick="filterFeedback('${r}')" data-fb="${r}"
+          class="group-chip ${r === 'All' ? 'active' : ''}">
+          ${r === 'All' ? 'All Ratings' : r + ' ⭐'}
+        </button>`).join('')}
+      <input id="fb-search" placeholder="Search vehicle, driver, client, passenger…"
+        oninput="filterFeedback()" class="form-input"
+        style="flex:1;min-width:200px;height:34px;padding:4px 12px;font-size:12px">
     </div>
 
     ${feedbacks.length ? `
@@ -2720,40 +2733,158 @@ async function pgFeedback() {
       <table class="data-table" id="fb-table">
         <thead><tr>
           <th>Date</th><th>Vehicle</th><th>Driver</th><th>Rating</th>
-          <th>Service</th><th>Driving</th><th>Comment</th><th>Passenger</th>
+          <th>Service</th><th>Driving</th>
+          <th>Client / Job</th><th>Route</th><th>Ref</th>
+          <th>Passenger</th><th>Comment</th><th></th>
         </tr></thead>
         <tbody>
-        ${feedbacks.map(f=>`<tr class="fb-row" data-rating="${f.rating||0}" data-search="${[f.plate_number||'',f.driver_name||'',f.passenger_name||''].join(' ').toLowerCase()}">
-          <td style="font-size:11px;white-space:nowrap">${f.created_at?new Date(f.created_at).toLocaleDateString('en-GB'):'—'}</td>
-          <td><strong>${sanitise(f.plate_number||'—')}</strong></td>
-          <td style="font-size:12px">${sanitise(f.driver_name||'—')}</td>
-          <td style="font-size:16px;text-align:center">${'⭐'.repeat(+f.rating||0)}</td>
-          <td style="font-size:12px">${sanitise(f.service_rating||'—')}</td>
-          <td style="font-size:12px">${sanitise(f.driving_rating||'—')}</td>
-          <td style="font-size:11px;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${sanitise(f.comment||'')}">${sanitise(f.comment||'—')}</td>
-          <td style="font-size:11px">${sanitise(f.passenger_name||'Anonymous')}</td>
-        </tr>`).join('')}
+        ${feedbacks.map(f => {
+          const clientName  = f.trip_client_name || f.passenger_employee_name || '—';
+          const clientPhone = f.trip_client_phone || '';
+          const route = (f.loading_site || f.pickup_location)
+            ? sanitise((f.loading_site || f.pickup_location) + ' → ' + (f.offloading_site || f.dropoff_location || ''))
+            : '—';
+          const jobRef = f.waybill_number || f.shipment_number || '—';
+          const search = [f.plate_number||'', f.driver_name||'', f.passenger_name||'', clientName, f.comment||''].join(' ').toLowerCase();
+          return `<tr class="fb-row" data-rating="${f.rating||0}" data-search="${search}"
+            style="cursor:pointer" onclick="showFeedbackDetail(${f.id})">
+            <td style="font-size:11px;white-space:nowrap">${f.created_at ? new Date(f.created_at).toLocaleDateString('en-GB') : '—'}</td>
+            <td><strong>${sanitise(f.plate_number||'—')}</strong>
+              ${f.vehicle_make ? `<div style="font-size:10px;color:var(--t3)">${sanitise(f.vehicle_make+' '+(f.vehicle_model||''))}</div>` : ''}</td>
+            <td><div style="font-weight:600">${sanitise(f.driver_name||'—')}</div>
+              ${f.driver_phone ? `<div style="font-size:10px;color:var(--t3)">${sanitise(f.driver_phone)}</div>` : ''}</td>
+            <td style="font-size:16px;text-align:center">${'⭐'.repeat(+f.rating||0)}</td>
+            <td style="font-size:12px">${sanitise(f.service_rating||'—')}</td>
+            <td style="font-size:12px">${sanitise(f.driving_rating||'—')}</td>
+            <td><div style="font-weight:600;font-size:12px">${sanitise(clientName)}</div>
+              ${clientPhone ? `<div style="font-size:10px;color:var(--t3)">${sanitise(clientPhone)}</div>` : ''}
+              ${f.company_name ? `<div style="font-size:10px;color:var(--t3)">${sanitise(f.company_name)}</div>` : ''}</td>
+            <td style="font-size:11px;color:var(--t2)">${route}</td>
+            <td style="font-size:11px;color:var(--t3)">${sanitise(jobRef)}</td>
+            <td style="font-size:11px">${sanitise(f.passenger_name||'Anonymous')}</td>
+            <td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+              title="${sanitise(f.comment||'')}">${sanitise(f.comment||'—')}</td>
+            <td><button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:10px"
+              onclick="event.stopPropagation();showFeedbackDetail(${f.id})">
+              <i class="ti ti-eye"></i></button></td>
+          </tr>`;
+        }).join('')}
         </tbody>
       </table>
-    </div>` : '<div class="empty-state"><div class="empty-icon"><i class="ti ti-message-star"></i></div><div class="empty-title">No feedback yet</div><div class="empty-sub">QR codes on pool cars will direct passengers here</div></div>'}
+    </div>` : `<div class="empty-state">
+      <div class="empty-icon"><i class="ti ti-message-star"></i></div>
+      <div class="empty-title">No passenger feedback yet</div>
+      <div class="empty-sub">Print QR cards from the Vehicles page and stick them inside pool cars.
+        Passengers scan after their ride — feedback links automatically to driver and job.</div>
+    </div>`}
+  `);
+}
+
+function showFeedbackDetail(id) {
+  const f = (window._feedbacks || []).find(x => x.id === id);
+  if (!f) return;
+  const stars = '⭐'.repeat(+f.rating || 0);
+  const clientName  = f.trip_client_name || f.passenger_employee_name || 'Not recorded';
+  const clientPhone = f.trip_client_phone || '—';
+  const route = (f.loading_site || f.pickup_location)
+    ? (f.loading_site || f.pickup_location) + ' → ' + (f.offloading_site || f.dropoff_location || '')
+    : 'Not recorded';
+  const feedbackDate = f.created_at ? new Date(f.created_at).toLocaleString('en-GB') : '—';
+  const tripDate     = f.trip_date   ? new Date(f.trip_date).toLocaleDateString('en-GB')  : '—';
+
+  const row = (label, val) => val && val !== '—' && val !== 'Not recorded'
+    ? `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+        <span style="color:var(--t3);font-size:12px">${label}</span>
+        <span style="font-size:12px;color:var(--t1);text-align:right;max-width:60%">${sanitise(String(val))}</span></div>`
+    : '';
+
+  showModal('Feedback Detail — ' + sanitise(f.plate_number || '—'), `
+    <div style="text-align:center;padding:14px 0 18px;border-bottom:1px solid rgba(255,255,255,.08);margin-bottom:14px">
+      <div style="font-size:30px;margin-bottom:4px">${stars}</div>
+      <div style="color:var(--gold);font-size:12px;font-weight:700">${['','Very Poor','Poor','Average','Good','Excellent'][+f.rating||0]||''}</div>
+      <div style="color:var(--t3);font-size:11px;margin-top:4px">${feedbackDate}</div>
+    </div>
+
+    <div style="color:var(--gold);font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:8px">VEHICLE &amp; DRIVER</div>
+    ${row('Plate Number', f.plate_number || f.vplate)}
+    ${row('Vehicle', f.vehicle_make ? f.vehicle_make + ' ' + (f.vehicle_model||'') : null)}
+    ${row('Driver', f.driver_name)}
+    ${row('Driver Phone', f.driver_phone)}
+    ${row('Licence No.', f.license_number)}
+
+    <div style="color:var(--gold);font-size:10px;font-weight:700;letter-spacing:1px;margin:14px 0 8px">TRIP / JOB DETAILS</div>
+    ${row('Trip Date', tripDate)}
+    ${row('Client', clientName)}
+    ${row('Client Phone', clientPhone)}
+    ${row('Company', f.company_name)}
+    ${row('Route', route)}
+    ${row('Waybill No.', f.waybill_number)}
+    ${row('Shipment No.', f.shipment_number)}
+    ${row('Purpose', f.reservation_purpose)}
+    ${row('Booked By', f.passenger_employee_name)}
+    ${row('Department', f.passenger_department)}
+
+    <div style="color:var(--gold);font-size:10px;font-weight:700;letter-spacing:1px;margin:14px 0 8px">FEEDBACK</div>
+    ${row('Service Quality', f.service_rating)}
+    ${row('Driving Quality', f.driving_rating)}
+    ${row('Passenger', f.passenger_name || 'Anonymous')}
+    ${f.comment ? `<div style="margin-top:10px;background:rgba(201,168,76,.05);border:1px solid rgba(201,168,76,.15);border-radius:8px;padding:12px">
+      <div style="color:var(--t3);font-size:10px;margin-bottom:6px">COMMENT</div>
+      <div style="font-size:13px;color:var(--t1);line-height:1.6">${sanitise(f.comment)}</div></div>` : ''}
   `);
 }
 
 function filterFeedback(rating) {
   if (rating) {
-    document.querySelectorAll('[data-fb]').forEach(b => b.classList.toggle('active', b.dataset.fb===rating));
+    document.querySelectorAll('[data-fb]').forEach(b =>
+      b.classList.toggle('active', b.dataset.fb === rating));
     window._fbFilter = rating;
   }
-  const r = window._fbFilter || 'All';
-  const q = (el('fb-search')?.value||'').toLowerCase();
+  const active = window._fbFilter || 'All';
+  const search = (document.getElementById('fb-search')?.value || '').toLowerCase();
   document.querySelectorAll('.fb-row').forEach(row => {
-    const matchR = r==='All' || row.dataset.rating===r;
-    const matchQ = !q || (row.dataset.search||'').includes(q);
-    row.style.display = matchR && matchQ ? '' : 'none';
+    const rOk = active === 'All' || row.dataset.rating === active;
+    const sOk = !search || (row.dataset.search || '').includes(search);
+    row.style.display = rOk && sOk ? '' : 'none';
   });
 }
 
-// ── POOL CAR QR FEEDBACK CARD ─────────────────────────────────────────────────
+function exportFeedbackCSV() {
+  const feedbacks = window._feedbacks || [];
+  if (!feedbacks.length) { showToast('No feedback to export', 'error'); return; }
+  const headers = ['Date','Plate','Driver','Driver Phone','Rating','Service','Driving',
+    'Comment','Passenger','Client','Client Phone','Company','Route','Waybill','Shipment','Trip Date'];
+  const rows = feedbacks.map(f => [
+    f.created_at ? new Date(f.created_at).toLocaleDateString('en-GB') : '',
+    f.plate_number || f.vplate || '',
+    f.driver_name || '',
+    f.driver_phone || '',
+    f.rating || '',
+    f.service_rating || '',
+    f.driving_rating || '',
+    f.comment || '',
+    f.passenger_name || 'Anonymous',
+    f.trip_client_name || f.passenger_employee_name || '',
+    f.trip_client_phone || '',
+    f.company_name || '',
+    (f.loading_site || f.pickup_location || '') + (f.offloading_site ? ' to ' + f.offloading_site : ''),
+    f.waybill_number || '',
+    f.shipment_number || '',
+    f.trip_date ? new Date(f.trip_date).toLocaleDateString('en-GB') : ''
+  ]);
+  const csv = [headers, ...rows]
+    .map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(','))
+    .join('\r\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'VMO_Feedback_' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.click();
+  showToast('Feedback exported', 'success');
+}
+
+
+
 function printPoolCarQR(plate, vehicleId) {
   const feedbackUrl = `https://vmo-virtual-medessy-ops-front-end.vercel.app/feedback?vehicle=${encodeURIComponent(plate)}&id=${vehicleId}`;
   const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(feedbackUrl)}&color=0D1117&bgcolor=C9A84C`;
