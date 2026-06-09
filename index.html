@@ -2908,11 +2908,8 @@ async function showPublicFeedbackForm() {
   };
 }
 
-// Check if this is a public feedback URL on page load
-if (window.location.search.includes('vehicle=')) {
-  window.addEventListener('DOMContentLoaded', showPublicFeedbackForm);
-  document.addEventListener('DOMContentLoaded', showPublicFeedbackForm);
-}
+// Public feedback form only triggers on dedicated /feedback path
+// NOT on the main app URL - this prevents hijacking the login screen
 
 function toggleVehicleGroup() {
   const vtype = el('nv-vtype')?.value;
