@@ -4543,15 +4543,10 @@ async function submitImprest() {
 
 // ── PETROL STATION IMPREST ────────────────────────────────────────────────────
 async function showPetrolStationImprest(vendorId, vendorName) {
-  // Load or create imprest account linked to this petrol station
   const accounts = await api('GET','/api/imprest').catch(()=>[]);
-  const linked = accounts.find(a => a.vendor_id === vendorId || a.name === vendorName + ' — Fuel Float');
-  
+  const linked = accounts.find(a => String(a.vendor_id)===String(vendorId) || a.name === vendorName + ' — Fuel Float');
   if (!linked) {
-    // Prompt to create one
-    if (confirm(`No imprest account found for ${vendorName}. Create one now?`)) {
-      await createPetrolStationImprest(vendorId, vendorName);
-    }
+    await createPetrolStationImprest(vendorId, vendorName);
     return;
   }
   showPetrolImprestDetail(linked, vendorName);
@@ -7063,8 +7058,34 @@ async function submitVendor() {
       local.push(payload);
       localStorage.setItem('vmo_vendors_local', JSON.stringify(local));
     }
+    // Auto-create imprest for petrol stations
+    if (payload.vendor_type === 'petrol_station') {
+      try {
+        const vendorsNow = await api('GET','/api/vendors').catch(()=>[]);
+        const newV = vendorsNow.find(v => v.company_name===payload.company_name || v.phone===payload.phone);
+        if (newV?.id) {
+          await api('POST', '/api/imprest', {
+            name: payload.company_name + ' — Fuel Float',
+            holder_type: 'unit',
+            holder_name: payload.company_name,
+            vendor_id: newV.id,
+            dedicated_category: 'FUEL',
+            bank_name: payload.bank_name||'',
+            account_number: payload.account_number||'',
+            account_name: payload.account_name||'',
+            balance: 0,
+            original_balance: 0,
+            status: 'active',
+          });
+        }
+        showToast('Petrol station registered + Fuel Float account created in Imprest','success');
+      } catch(e2) {
+        showToast('Vendor registered. Imprest auto-creation pending — fund manually.','success');
+      }
+    } else {
+      showToast('Vendor registered successfully','success');
+    }
     closeModal();
-    showToast('Vendor registered successfully','success');
     navigate('vendors');
   } catch(e) { alert(e.message||'Failed to register vendor'); }
 }
