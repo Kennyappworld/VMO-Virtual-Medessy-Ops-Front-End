@@ -2733,7 +2733,7 @@ async function pgFeedback() {
       <table class="data-table" id="fb-table">
         <thead><tr>
           <th>Date</th><th>Vehicle</th><th>Driver</th><th>Rating</th>
-          <th>Service</th><th>Driving</th>
+          <th>Cleanliness</th><th>Professionalism</th><th>Service</th>
           <th>Client / Job</th><th>Route</th><th>Ref</th>
           <th>Passenger</th><th>Comment</th><th>Suggestion</th><th></th>
         </tr></thead>
@@ -2756,6 +2756,7 @@ async function pgFeedback() {
             <td style="font-size:16px;text-align:center">${'⭐'.repeat(+f.rating||0)}</td>
             <td style="font-size:12px">${sanitise(f.service_rating||'—')}</td>
             <td style="font-size:12px">${sanitise(f.driving_rating||'—')}</td>
+            <td style="font-size:12px">${sanitise(f.overall_service||'—')}</td>
             <td><div style="font-weight:600;font-size:12px">${sanitise(clientName)}</div>
               ${clientPhone ? `<div style="font-size:10px;color:var(--t3)">${sanitise(clientPhone)}</div>` : ''}
               ${f.company_name ? `<div style="font-size:10px;color:var(--t3)">${sanitise(f.company_name)}</div>` : ''}</td>
@@ -2827,8 +2828,9 @@ function showFeedbackDetail(id) {
     ${row('Department', f.passenger_department)}
 
     <div style="color:var(--gold);font-size:10px;font-weight:700;letter-spacing:1px;margin:14px 0 8px">FEEDBACK</div>
-    ${row('Service Quality', f.service_rating)}
-    ${row('Driving Quality', f.driving_rating)}
+    ${row('Car Cleanliness', f.service_rating)}
+    ${row('Driver Professionalism', f.driving_rating)}
+    ${row('Overall Service', f.overall_service)}
     ${row('Passenger', f.passenger_name || 'Anonymous')}
     ${f.suggestion ? `<div style="margin-top:10px;background:rgba(96,165,250,.05);border:1px solid rgba(96,165,250,.2);border-radius:8px;padding:12px">
       <div style="color:#60a5fa;font-size:10px;margin-bottom:6px">💡 SUGGESTION</div>
@@ -2857,7 +2859,7 @@ function filterFeedback(rating) {
 function exportFeedbackCSV() {
   const feedbacks = window._feedbacks || [];
   if (!feedbacks.length) { showToast('No feedback to export', 'error'); return; }
-  const headers = ['Date','Plate','Driver','Driver Phone','Rating','Service','Driving',
+  const headers = ['Date','Plate','Driver','Driver Phone','Rating','Cleanliness','Professionalism','Overall Service',
     'Comment','Suggestion','Passenger','Client','Client Phone','Company','Route','Waybill','Shipment','Trip Date'];
   const rows = feedbacks.map(f => [
     f.created_at ? new Date(f.created_at).toLocaleDateString('en-GB') : '',
@@ -2867,6 +2869,7 @@ function exportFeedbackCSV() {
     f.rating || '',
     f.service_rating || '',
     f.driving_rating || '',
+    f.overall_service || '',
     f.comment || '',
     f.suggestion || '',
     f.passenger_name || 'Anonymous',
@@ -2949,173 +2952,190 @@ async function showPublicFeedbackForm() {
   const params    = new URLSearchParams(window.location.search);
   const plate     = (params.get('vehicle') || '').toUpperCase().trim();
   const vehicleId = params.get('id') || '';
-  if (!plate) return;  // Nothing to show without a plate number
+  if (!plate) return;
 
-  // ── Step tracker ──────────────────────────────────────────────────────────
-  // The form moves through 3 light steps so it never feels like a survey:
-  //   Step 1 — tap a star (instant, no typing)
-  //   Step 2 — two quick emoji taps for service + driving
-  //   Step 3 — optional name + optional suggestion, then submit
-  let step       = 1;
-  let rating     = 0;
-  let serviceTag = '';
-  let drivingTag = '';
-  let vehicleInfo = null;  // Populated from backend once the QR is scanned
+  // ── State ──────────────────────────────────────────────────────────────────
+  // Four things to capture before we show the submit screen:
+  //   1. Overall star rating
+  //   2. Car cleanliness   (tap)
+  //   3. Driver professionalism (tap)
+  //   4. Overall service quality (tap)
+  // Then an open comment + suggestion text area — both optional
+  let step         = 1;   // 1 = stars, 2 = three quick questions, 3 = comments + submit
+  let rating       = 0;
+  let cleanliness  = '';
+  let professionalism = '';
+  let serviceQuality  = '';
+  let vehicleInfo  = null;
 
-  // Colour palette used throughout the form
-  const BG       = '#0D1117';
-  const CARD     = '#161B22';
-  const GOLD     = '#C9A84C';
-  const GOLD_DIM = 'rgba(201,168,76,.15)';
-  const T1       = '#E6EDF3';
-  const T3       = '#8B949E';
+  const BG      = '#0D1117';
+  const CARD    = '#161B22';
+  const GOLD    = '#C9A84C';
+  const GOLD_DIM = 'rgba(201,168,76,.18)';
+  const T1      = '#E6EDF3';
+  const T3      = '#8B949E';
 
-  // ── Helper: render the current step into the page ────────────────────────
-  function render() {
-    document.body.innerHTML = buildShell(step === 1 ? buildStep1() : step === 2 ? buildStep2() : buildStep3());
-    wireStep();
-  }
-
-  // ── Outer shell — consistent across all 3 steps ──────────────────────────
+  // ── Shell — wraps every step ──────────────────────────────────────────────
   function buildShell(inner) {
-    // Show vehicle + driver info banner if we have it
     const infoBanner = vehicleInfo ? `
-      <div style="display:flex;align-items:center;gap:12px;background:rgba(201,168,76,.07);
-                  border:1px solid ${GOLD_DIM};border-radius:12px;padding:12px 14px;margin-bottom:22px;text-align:left">
-        <div style="background:${GOLD};border-radius:50%;width:40px;height:40px;display:flex;
-                    align-items:center;justify-content:center;flex-shrink:0;font-size:18px">🚗</div>
+      <div style="display:flex;align-items:center;gap:12px;
+                  background:rgba(201,168,76,.07);border:1px solid ${GOLD_DIM};
+                  border-radius:12px;padding:12px 14px;margin-bottom:22px;text-align:left">
+        <div style="background:${GOLD};border-radius:50%;width:40px;height:40px;flex-shrink:0;
+                    display:flex;align-items:center;justify-content:center;font-size:18px">🚗</div>
         <div style="flex:1;min-width:0">
-          <div style="color:${T1};font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-            ${vehicleInfo.make || ''} ${vehicleInfo.model || ''} — <span style="color:${GOLD}">${plate}</span>
+          <div style="color:${T1};font-weight:700;font-size:14px;
+                      white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${vehicleInfo.make||''} ${vehicleInfo.model||''} &nbsp;·&nbsp;
+            <span style="color:${GOLD}">${plate}</span>
           </div>
-          ${vehicleInfo.driver_name ? `<div style="color:${T3};font-size:12px;margin-top:2px">
-            🧑‍✈️ ${vehicleInfo.driver_name}${vehicleInfo.department ? ' · ' + vehicleInfo.department : ''}
+          ${vehicleInfo.driver_name ? `
+          <div style="color:${T3};font-size:12px;margin-top:2px">
+            🧑‍✈️ ${vehicleInfo.driver_name}
+            ${vehicleInfo.department ? ' · '+vehicleInfo.department : ''}
           </div>` : ''}
         </div>
       </div>` : `
-      <div style="background:${BG};border:2px solid ${GOLD};border-radius:10px;padding:8px 20px;
-                  display:inline-block;margin-bottom:20px">
+      <div style="background:${BG};border:2px solid ${GOLD};border-radius:10px;
+                  padding:7px 18px;display:inline-block;margin-bottom:20px">
         <span style="color:#fff;font-size:20px;font-weight:900;letter-spacing:3px">${plate}</span>
       </div>`;
 
-    // Progress dots
-    const dots = [1,2,3].map(i => `
-      <div style="width:${i===step?'20px':'8px'};height:8px;border-radius:4px;
-                  background:${i<=step?GOLD:'rgba(201,168,76,.2)'};
-                  transition:all .3s ease"></div>`).join('');
+    // Progress bar — fills as steps advance
+    const pct = step === 1 ? 10 : step === 2 ? 55 : 90;
+    const progressBar = `
+      <div style="background:rgba(201,168,76,.12);border-radius:99px;
+                  height:4px;margin-bottom:22px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:${GOLD};
+                    border-radius:99px;transition:width .4s ease"></div>
+      </div>`;
 
     return `
       <div style="min-height:100vh;background:${BG};display:flex;align-items:center;
                   justify-content:center;padding:20px;
                   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
-        <div style="background:${CARD};border:1px solid rgba(201,168,76,.25);border-radius:20px;
-                    padding:28px 24px;max-width:400px;width:100%;text-align:center;
-                    box-shadow:0 20px 60px rgba(0,0,0,.5)">
+        <div style="background:${CARD};border:1px solid rgba(201,168,76,.2);border-radius:20px;
+                    padding:28px 22px;max-width:400px;width:100%;text-align:center;
+                    box-shadow:0 24px 64px rgba(0,0,0,.5)">
 
-          <!-- Header -->
-          <div style="margin-bottom:6px">
-            <div style="color:${GOLD};font-size:20px;font-weight:900;letter-spacing:2px">NG RIDE</div>
-            <div style="color:${T3};font-size:10px;letter-spacing:2px;margin-bottom:16px">MEDESSY ENTERPRISES</div>
+          <div style="margin-bottom:16px">
+            <div style="color:${GOLD};font-size:18px;font-weight:900;letter-spacing:2px">NG RIDE</div>
+            <div style="color:${T3};font-size:10px;letter-spacing:2px">MEDESSY ENTERPRISES</div>
           </div>
 
-          <!-- Vehicle / driver banner -->
           ${infoBanner}
-
-          <!-- Step content -->
+          ${progressBar}
           ${inner}
 
-          <!-- Progress indicator -->
-          <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:22px">
-            ${dots}
-          </div>
-          <div style="margin-top:14px;color:rgba(255,255,255,.15);font-size:10px">
+          <div style="margin-top:18px;color:rgba(255,255,255,.15);font-size:10px">
             NG Ride · Powered by VMO
           </div>
         </div>
       </div>`;
   }
 
-  // ── Step 1: Big star tap — the most important signal ─────────────────────
+  // ── Step 1: Star rating ───────────────────────────────────────────────────
   function buildStep1() {
     return `
-      <div style="margin-bottom:8px;color:${T1};font-size:18px;font-weight:700;line-height:1.4">
-        How was your ride?
+      <div style="color:${T1};font-size:18px;font-weight:700;line-height:1.4;margin-bottom:6px">
+        How was your ride today?
       </div>
-      <div style="color:${T3};font-size:13px;margin-bottom:24px">
-        Tap a star — takes 2 seconds 👇
+      <div style="color:${T3};font-size:13px;margin-bottom:26px">
+        Tap a star to start 👇
       </div>
-      <div id="stars" style="display:flex;justify-content:center;gap:8px;margin-bottom:8px">
+      <div style="display:flex;justify-content:center;gap:6px;margin-bottom:10px">
         ${[1,2,3,4,5].map(i => `
           <span data-star="${i}" onclick="tapStar(${i})"
-            style="font-size:42px;cursor:pointer;opacity:.25;
-                   transition:all .2s;transform:scale(1);display:inline-block">⭐</span>
+            style="font-size:44px;cursor:pointer;opacity:.2;display:inline-block;
+                   transition:transform .2s,opacity .2s,filter .2s">⭐</span>
         `).join('')}
       </div>
-      <div id="star-label" style="color:${GOLD};font-size:13px;font-weight:600;
-           min-height:20px;margin-bottom:20px;transition:all .2s"> </div>`;
+      <div id="star-label" style="color:${GOLD};font-size:14px;font-weight:600;min-height:22px"></div>`;
   }
 
-  // ── Step 2: Two quick emoji-based quality questions ───────────────────────
+  // ── Step 2: Three specific tap questions ─────────────────────────────────
+  // Each question has 4 emoji chips — one tap per question, no typing.
+  // "Continue" unlocks only once all three are answered.
   function buildStep2() {
-    const starLabels = ['','😔 Very poor','😐 Not great','😊 Okay','😄 Good','🤩 Excellent!'];
-    const chips = (options, group) => options.map(([emoji, label, val]) => `
-      <button data-group="${group}" data-val="${val}" onclick="tapChip(this, '${group}')"
-        style="padding:10px 14px;border-radius:12px;border:1.5px solid rgba(201,168,76,.25);
-               background:transparent;color:${T1};font-size:13px;cursor:pointer;
-               transition:all .2s;display:flex;flex-direction:column;align-items:center;gap:3px;
-               min-width:70px;flex:1">
-        <span style="font-size:22px">${emoji}</span>
-        <span style="font-size:10px;color:${T3}">${label}</span>
-      </button>`).join('');
+    const starLabels = ['','😔 Hmm','😐 Okay','🙂 Good','😄 Great','🤩 Excellent!'];
+
+    // Renders a row of emoji chips for one question
+    function chipRow(id, options) {
+      return `<div id="chips-${id}" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center">
+        ${options.map(([emoji, label, val]) => `
+          <button data-group="${id}" data-val="${val}" onclick="tapChip(this,'${id}')"
+            style="flex:1;min-width:64px;max-width:90px;padding:10px 6px;border-radius:12px;
+                   border:1.5px solid rgba(201,168,76,.2);background:transparent;
+                   color:${T1};cursor:pointer;transition:all .18s;
+                   display:flex;flex-direction:column;align-items:center;gap:3px">
+            <span style="font-size:22px">${emoji}</span>
+            <span style="font-size:10px;color:${T3};line-height:1.2">${label}</span>
+          </button>`).join('')}
+      </div>`;
+    }
 
     return `
       <div style="color:${T1};font-size:16px;font-weight:700;margin-bottom:4px">
-        ${starLabels[rating]} — just two more taps
+        ${starLabels[rating]} — three quick taps
       </div>
-      <div style="color:${T3};font-size:12px;margin-bottom:22px">No typing needed</div>
+      <div style="color:${T3};font-size:12px;margin-bottom:22px">No typing — just tap once per row</div>
 
+      <!-- Question 1: Car cleanliness -->
       <div style="text-align:left;margin-bottom:18px">
         <div style="color:${T3};font-size:11px;text-transform:uppercase;
-                    letter-spacing:.8px;margin-bottom:10px">Service &amp; Comfort</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${chips([
-            ['😍','Excellent','Excellent'],
-            ['👍','Good','Good'],
-            ['😐','Okay','Fair'],
-            ['👎','Poor','Poor']
-          ], 'service')}
+                    letter-spacing:.8px;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+          <span style="font-size:16px">🧹</span> Car Cleanliness
         </div>
+        ${chipRow('clean', [
+          ['✨','Spotless','Excellent'],
+          ['👌','Clean','Good'],
+          ['😐','Okay','Fair'],
+          ['😬','Dirty','Poor']
+        ])}
       </div>
 
-      <div style="text-align:left;margin-bottom:20px">
+      <!-- Question 2: Driver professionalism -->
+      <div style="text-align:left;margin-bottom:18px">
         <div style="color:${T3};font-size:11px;text-transform:uppercase;
-                    letter-spacing:.8px;margin-bottom:10px">Driver &amp; Safety</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${chips([
-            ['🏎️','Safe &amp; fast','Excellent'],
-            ['🚗','Steady','Good'],
-            ['😬','Could improve','Fair'],
-            ['🛑','Unsafe','Poor']
-          ], 'driving')}
+                    letter-spacing:.8px;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+          <span style="font-size:16px">🧑‍✈️</span> Driver Professionalism
         </div>
+        ${chipRow('prof', [
+          ['🌟','Excellent','Excellent'],
+          ['👍','Good','Good'],
+          ['😐','Average','Fair'],
+          ['👎','Poor','Poor']
+        ])}
       </div>
 
-      <button id="step2-next" onclick="goStep3()"
+      <!-- Question 3: Overall service quality -->
+      <div style="text-align:left;margin-bottom:22px">
+        <div style="color:${T3};font-size:11px;text-transform:uppercase;
+                    letter-spacing:.8px;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+          <span style="font-size:16px">🚗</span> Overall Service
+        </div>
+        ${chipRow('service', [
+          ['🏆','Top notch','Excellent'],
+          ['😊','Satisfied','Good'],
+          ['😑','Just okay','Fair'],
+          ['😞','Disappointed','Poor']
+        ])}
+      </div>
+
+      <button id="btn-continue" onclick="goStep3()" disabled
         style="width:100%;padding:14px;background:${GOLD};color:${BG};font-weight:800;
-               font-size:15px;border:none;border-radius:12px;cursor:pointer;
-               opacity:.4;pointer-events:none;transition:all .2s">
+               font-size:15px;border:none;border-radius:12px;cursor:not-allowed;
+               opacity:.35;transition:all .2s">
         Continue →
       </button>`;
   }
 
-  // ── Step 3: Optional name + suggestion + submit ───────────────────────────
+  // ── Step 3: Open text fields + submit ─────────────────────────────────────
   function buildStep3() {
     return `
-      <div style="color:${T1};font-size:16px;font-weight:700;margin-bottom:4px">
-        Almost done! 🙌
-      </div>
+      <div style="color:${T1};font-size:16px;font-weight:700;margin-bottom:4px">Almost done! 🙌</div>
       <div style="color:${T3};font-size:12px;margin-bottom:22px">
-        Both fields are completely optional
+        Both fields are optional — share as much or as little as you like
       </div>
 
       <div style="text-align:left;margin-bottom:14px">
@@ -3123,78 +3143,95 @@ async function showPublicFeedbackForm() {
                       letter-spacing:.8px;display:block;margin-bottom:8px">
           Your first name
         </label>
-        <input id="fb-name" placeholder="e.g. Chioma (or leave blank)"
-          style="width:100%;padding:12px;background:${BG};border:1px solid rgba(201,168,76,.25);
-                 border-radius:10px;color:${T1};font-size:14px;box-sizing:border-box;
-                 outline:none;transition:border .2s"
-          onfocus="this.style.borderColor='${GOLD}'" onblur="this.style.borderColor='rgba(201,168,76,.25)'">
+        <input id="fb-name" placeholder="e.g. Chioma"
+          style="width:100%;padding:12px;background:${BG};
+                 border:1.5px solid rgba(201,168,76,.2);border-radius:10px;
+                 color:${T1};font-size:14px;box-sizing:border-box;outline:none;transition:border .2s"
+          onfocus="this.style.borderColor='${GOLD}'"
+          onblur="this.style.borderColor='rgba(201,168,76,.2)'">
       </div>
 
       <div style="text-align:left;margin-bottom:14px">
         <label style="color:${T3};font-size:11px;text-transform:uppercase;
                       letter-spacing:.8px;display:block;margin-bottom:8px">
-          Anything we should know? 💬
+          💬 Feedback or comments
         </label>
-        <textarea id="fb-comment" placeholder="The driver was super polite… or anything that stood out"
-          style="width:100%;padding:12px;background:${BG};border:1px solid rgba(201,168,76,.25);
-                 border-radius:10px;color:${T1};font-size:13px;min-height:72px;resize:none;
-                 box-sizing:border-box;outline:none;transition:border .2s;line-height:1.5"
-          onfocus="this.style.borderColor='${GOLD}'" onblur="this.style.borderColor='rgba(201,168,76,.25)'"></textarea>
+        <textarea id="fb-comment"
+          placeholder="Anything that stood out — good or bad…"
+          style="width:100%;padding:12px;background:${BG};
+                 border:1.5px solid rgba(201,168,76,.2);border-radius:10px;
+                 color:${T1};font-size:13px;min-height:74px;resize:none;
+                 box-sizing:border-box;outline:none;line-height:1.5;transition:border .2s"
+          onfocus="this.style.borderColor='${GOLD}'"
+          onblur="this.style.borderColor='rgba(201,168,76,.2)'"></textarea>
       </div>
 
-      <div style="text-align:left;margin-bottom:22px">
+      <div style="text-align:left;margin-bottom:24px">
         <label style="color:${T3};font-size:11px;text-transform:uppercase;
                       letter-spacing:.8px;display:block;margin-bottom:8px">
-          Suggestions for improvement 💡
+          💡 Suggestions for improvement
         </label>
-        <textarea id="fb-suggestion" placeholder="e.g. Earlier pickup, cooler AC, better music… anything helps!"
-          style="width:100%;padding:12px;background:${BG};border:1px solid rgba(201,168,76,.25);
-                 border-radius:10px;color:${T1};font-size:13px;min-height:72px;resize:none;
-                 box-sizing:border-box;outline:none;transition:border .2s;line-height:1.5"
-          onfocus="this.style.borderColor='${GOLD}'" onblur="this.style.borderColor='rgba(201,168,76,.25)'"></textarea>
+        <textarea id="fb-suggestion"
+          placeholder="e.g. Earlier pickup, cooler AC, better music… anything helps!"
+          style="width:100%;padding:12px;background:${BG};
+                 border:1.5px solid rgba(201,168,76,.2);border-radius:10px;
+                 color:${T1};font-size:13px;min-height:74px;resize:none;
+                 box-sizing:border-box;outline:none;line-height:1.5;transition:border .2s"
+          onfocus="this.style.borderColor='${GOLD}'"
+          onblur="this.style.borderColor='rgba(201,168,76,.2)'"></textarea>
       </div>
 
       <button onclick="submitFeedback()"
-        style="width:100%;padding:15px;background:linear-gradient(135deg,#e8c86a,#C9A84C,#a8782a);
-               color:${BG};font-weight:800;font-size:15px;border:none;border-radius:12px;
-               cursor:pointer;letter-spacing:.3px;box-shadow:0 4px 20px rgba(201,168,76,.35)">
+        style="width:100%;padding:15px;
+               background:linear-gradient(135deg,#e8c86a,#C9A84C,#a8782a);
+               color:${BG};font-weight:800;font-size:15px;border:none;
+               border-radius:12px;cursor:pointer;letter-spacing:.3px;
+               box-shadow:0 4px 20px rgba(201,168,76,.35)">
         Send feedback 🚀
       </button>`;
   }
 
-  // ── Wire up interactivity after each render ───────────────────────────────
+  // ── Wire up all event handlers after each render ──────────────────────────
   function wireStep() {
+
     window.tapStar = (n) => {
       rating = n;
-      const labels = ['','Poor 😔','Not great 😐','Okay 😊','Good 😄','Excellent 🤩'];
+      const labels = ['','Poor 😔','Not great 😐','Okay 🙂','Good 😄','Excellent 🤩'];
       document.querySelectorAll('[data-star]').forEach(s => {
         const v = +s.dataset.star;
-        s.style.opacity     = v <= n ? '1' : '.2';
-        s.style.transform   = v <= n ? 'scale(1.15)' : 'scale(1)';
-        s.style.filter      = v <= n ? 'drop-shadow(0 0 8px gold)' : 'none';
+        s.style.opacity   = v <= n ? '1'   : '.2';
+        s.style.transform = v <= n ? 'scale(1.18)' : 'scale(1)';
+        s.style.filter    = v <= n ? 'drop-shadow(0 0 8px gold)' : 'none';
       });
       const lbl = document.getElementById('star-label');
       if (lbl) lbl.textContent = labels[n] || '';
-      // Short delay then auto-advance to step 2
-      setTimeout(() => { step = 2; render(); }, 420);
+      // Tiny pause so the star animation is visible before advancing
+      setTimeout(() => { step = 2; render(); }, 380);
     };
 
     window.tapChip = (el, group) => {
-      // Highlight selected chip
+      // Clear all chips in this group, then highlight the tapped one
       document.querySelectorAll(`[data-group="${group}"]`).forEach(b => {
         b.style.background   = 'transparent';
-        b.style.borderColor  = 'rgba(201,168,76,.25)';
-        b.style.color        = T1;
+        b.style.borderColor  = 'rgba(201,168,76,.2)';
+        b.querySelector('span:last-child').style.color = T3;
       });
       el.style.background  = GOLD;
       el.style.borderColor = GOLD;
-      el.style.color       = BG;
-      if (group === 'service') serviceTag = el.dataset.val;
-      if (group === 'driving') drivingTag = el.dataset.val;
-      // Enable the continue button once both are tapped
-      if (serviceTag && drivingTag) {
-        const btn = document.getElementById('step2-next');
-        if (btn) { btn.style.opacity = '1'; btn.style.pointerEvents = 'auto'; }
+      el.querySelector('span:last-child').style.color = BG;
+
+      if (group === 'clean')   cleanliness     = el.dataset.val;
+      if (group === 'prof')    professionalism = el.dataset.val;
+      if (group === 'service') serviceQuality  = el.dataset.val;
+
+      // Unlock Continue once all three questions have an answer
+      if (cleanliness && professionalism && serviceQuality) {
+        const btn = document.getElementById('btn-continue');
+        if (btn) {
+          btn.disabled            = false;
+          btn.style.opacity       = '1';
+          btn.style.cursor        = 'pointer';
+        }
       }
     };
 
@@ -3202,78 +3239,92 @@ async function showPublicFeedbackForm() {
 
     window.submitFeedback = async () => {
       const btn = document.querySelector('[onclick="submitFeedback()"]');
-      if (btn) { btn.textContent = 'Sending…'; btn.disabled = true; }
+      if (btn) { btn.textContent = 'Sending…'; btn.disabled = true; btn.style.opacity = '.7'; }
 
       const payload = {
-        plate_number:   plate,
-        vehicle_id:     vehicleId || (vehicleInfo?.id || null),
+        plate_number:    plate,
+        vehicle_id:      vehicleId || (vehicleInfo?.id || null),
         rating,
-        service_rating: serviceTag,
-        driving_rating: drivingTag,
-        comment:        document.getElementById('fb-comment')?.value?.trim() || '',
-        suggestion:     document.getElementById('fb-suggestion')?.value?.trim() || '',
-        passenger_name: document.getElementById('fb-name')?.value?.trim() || 'Anonymous',
+        // Map the three specific questions into the existing fields
+        // cleanliness → stored as service_rating for now
+        // professionalism → stored as driving_rating
+        // service quality → stored as the overall qualifier in the comment prefix
+        service_rating:  cleanliness,      // Car cleanliness
+        driving_rating:  professionalism,  // Driver professionalism
+        overall_service: serviceQuality,   // Overall service (new field)
+        comment:         document.getElementById('fb-comment')?.value?.trim()     || '',
+        suggestion:      document.getElementById('fb-suggestion')?.value?.trim()  || '',
+        passenger_name:  document.getElementById('fb-name')?.value?.trim()        || 'Anonymous',
       };
 
       try {
         const res = await fetch('https://vmo-virtual-medessy-opps-backend-production.up.railway.app/api/feedback', {
-          method: 'POST',
+          method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body:    JSON.stringify(payload)
         });
         if (!res.ok) throw new Error('Server error');
 
-        // ── Thank-you screen ──────────────────────────────────────────────
+        // ── Thank-you screen ────────────────────────────────────────────────
         document.body.innerHTML = `
           <div style="min-height:100vh;background:#0D1117;display:flex;align-items:center;
-                      justify-content:center;font-family:-apple-system,sans-serif;padding:20px">
-            <div style="text-align:center;max-width:360px">
+                      justify-content:center;padding:20px;
+                      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+            <div style="text-align:center;max-width:340px">
               <div style="font-size:72px;margin-bottom:20px;
-                          animation:pop .4s cubic-bezier(.175,.885,.32,1.275) both">🙏</div>
+                          animation:pop .45s cubic-bezier(.175,.885,.32,1.275) both">🙏</div>
               <div style="color:#C9A84C;font-size:26px;font-weight:900;margin-bottom:10px">
                 Thank you!
               </div>
-              <div style="color:rgba(255,255,255,.7);font-size:15px;line-height:1.7;margin-bottom:28px">
+              <div style="color:rgba(255,255,255,.65);font-size:15px;line-height:1.7;margin-bottom:28px">
                 Your feedback helps us make every ride better.
-                ${payload.suggestion ? '<br><br><span style="color:rgba(201,168,76,.7);font-size:13px">We\'ve noted your suggestion — it goes straight to the team. 💪</span>' : ''}
+                ${payload.suggestion
+                  ? `<br><br><span style="color:rgba(201,168,76,.75);font-size:13px">
+                       We've noted your suggestion — it goes straight to the team 💪</span>`
+                  : ''}
               </div>
               <div style="color:#C9A84C;font-weight:700;font-size:13px;margin-bottom:4px">NG RIDE</div>
-              <div style="color:rgba(255,255,255,.3);font-size:11px">Medessy Enterprises Limited</div>
+              <div style="color:rgba(255,255,255,.25);font-size:11px">Medessy Enterprises Limited</div>
             </div>
           </div>
           <style>
             @keyframes pop {
-              0%   { transform: scale(0) rotate(-10deg); opacity:0 }
-              70%  { transform: scale(1.15) rotate(5deg) }
-              100% { transform: scale(1) rotate(0); opacity:1 }
+              0%   { transform:scale(0) rotate(-10deg); opacity:0 }
+              70%  { transform:scale(1.15) rotate(4deg) }
+              100% { transform:scale(1) rotate(0); opacity:1 }
             }
           </style>`;
+
       } catch(e) {
-        if (btn) { btn.textContent = 'Send feedback 🚀'; btn.disabled = false; }
-        // Show a friendly inline error instead of a jarring alert
+        if (btn) { btn.textContent = 'Send feedback 🚀'; btn.disabled = false; btn.style.opacity = '1'; }
         const err = document.createElement('div');
-        err.textContent = 'Network hiccup — please try again in a moment.';
+        err.textContent  = 'Network hiccup — please try again.';
         err.style.cssText = 'color:#ff6b6b;font-size:12px;text-align:center;margin-top:12px';
         btn?.parentNode?.appendChild(err);
       }
     };
   }
 
-  // ── Fetch vehicle + driver info in the background while the form renders ──
-  // If it loads before the user submits, the banner appears automatically.
-  // If the network is slow, the form still works — the banner just stays hidden.
-  render();  // Show immediately without waiting for the network
+  // Render the form immediately; vehicle info loads in the background
+  function render() {
+    const inner = step === 1 ? buildStep1() : step === 2 ? buildStep2() : buildStep3();
+    document.body.innerHTML = buildShell(inner);
+    wireStep();
+  }
 
+  render();
+
+  // Silently fetch vehicle + driver info — if it arrives before step 1 is done
+  // we re-render the banner; otherwise the form just runs without it
   fetch('https://vmo-virtual-medessy-opps-backend-production.up.railway.app/api/public/vehicle/' + encodeURIComponent(plate))
     .then(r => r.ok ? r.json() : null)
     .then(info => {
-      if (info && info.id) {
+      if (info?.id) {
         vehicleInfo = info;
-        // Only re-render step 1 banner if the user hasn't tapped yet
         if (step === 1) render();
       }
     })
-    .catch(() => {});  // Silently ignore — the form works without it
+    .catch(() => {});
 }
 
 // Public feedback form only triggers on dedicated /feedback path
@@ -11473,7 +11524,7 @@ async function renderDriverRatings(month, year, monthName) {
         <table class="data-table">
           <thead><tr>
             <th>Rank</th><th>Driver</th><th>Vehicle</th><th>Reviews</th>
-            <th>Avg Rating</th><th>Service</th><th>Driving</th>
+            <th>Avg Rating</th><th>Cleanliness</th><th>Professionalism</th><th>Service</th>
           </tr></thead>
           <tbody>
           ${drivers.map((d,i) => {
