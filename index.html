@@ -3982,68 +3982,241 @@ async function submitDriver() {
 
 // ── COMPLIANCE ────────────────────────────────────────────────────────────────
 async function pgCompliance() {
+  html('topbar-btn', `<button class="topbar-action" onclick="showNewComplianceDoc()" title="Add compliance document"><i class="ti ti-plus"></i></button>`);
   html('page-content', `<div class="loading-state"><div class="spinner"></div><p style="color:var(--text3);font-size:13px;margin-top:8px">Checking compliance...</p></div>`);
-  const data = await api('GET', '/api/compliance/alerts').catch(() => ({ vehicles:[], drivers:[], credit_due:[] }));
-  const veh = data.vehicles || [];
-  const drv = data.drivers || [];
-  const cred = data.credit_due || [];
+  const [alertData, vehicles, drivers] = await Promise.all([
+    api('GET', '/api/compliance/alerts').catch(() => ({ vehicles:[], drivers:[], credit_due:[] })),
+    api('GET', '/api/vehicles').catch(()=>[]),
+    api('GET', '/api/drivers').catch(()=>[]),
+  ]);
+  const veh = alertData.vehicles || [];
+  const drv = alertData.drivers || [];
+  const cred = alertData.credit_due || [];
 
-  if (!veh.length && !drv.length && !cred.length) {
-    html('page-content', `<div class="empty-state">
-      <div style="font-size:64px">✅</div>
-      <div class="empty-title">All Clear!</div>
-      <div class="empty-sub">No compliance issues found</div>
-    </div>`);
-    return;
-  }
+  const totalIssues = veh.length + drv.length + cred.length;
+
+  // Build combined data: all vehicles (not just expired) for full registry view
+  const DOCS = ['insurance_expiry','road_worthiness_expiry','hackney_permit_expiry','vehicle_license_expiry','tracker_expiry'];
+  const LABELS = ['Insurance','Road Worthy','Hackney Permit','V. Licence','Tracker'];
 
   html('page-content', `
-    ${veh.length ? `
-    <div class="card" style="border-left:3px solid var(--red)">
-      <div class="card-title"><i class="ti ti-truck" style="color:var(--red)"></i> Vehicle Documents (${veh.length})</div>
-      ${veh.map(v => {
-        const docs = ['insurance_expiry','road_worthiness_expiry','hackney_permit_expiry','vehicle_license_expiry','tracker_expiry'];
-        const labels = ['Insurance','Road Worthy','Hackney','V. License','Tracker'];
-        const expiring = docs.map((d,i) => ({label:labels[i], days:daysLeft(v[d]), date:v[d]})).filter(x => x.days !== null && x.days <= 30);
-        return `<div class="list-item">
-          <div class="list-dot red"><i class="ti ti-truck"></i></div>
-          <div class="list-body">
-            <div class="list-title">${v.plate_number} ${v.make?'· '+v.make:''}</div>
-            ${expiring.map(x => `<div class="list-sub ${x.days<=0?'blink':''}" style="color:${x.days<=0?'var(--red)':'var(--amber)'}">${x.label}: ${x.days<=0?'EXPIRED':'expires in '+x.days+'d'} (${fmtDate(x.date)})</div>`).join('')}
-          </div>
-        </div>`;
-      }).join('')}
-    </div>` : ''}
+    <!-- Summary stat bar -->
+    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+      <div class="stat-card stat-red"><div class="stat-label">Expired Docs</div><div class="stat-value" style="font-size:22px">${veh.filter(v=>DOCS.some(d=>daysLeft(v[d])!==null&&daysLeft(v[d])<=0)).length + drv.filter(d=>daysLeft(d.license_expiry)!==null&&daysLeft(d.license_expiry)<=0).length}</div></div>
+      <div class="stat-card stat-amber"><div class="stat-label">Expiring Soon</div><div class="stat-value" style="font-size:22px">${veh.length + drv.length}</div></div>
+      <div class="stat-card stat-blue"><div class="stat-label">Total Vehicles</div><div class="stat-value" style="font-size:22px">${vehicles.length}</div></div>
+      <div class="stat-card stat-green"><div class="stat-label">Total Drivers</div><div class="stat-value" style="font-size:22px">${drivers.length}</div></div>
+    </div>
 
-    ${drv.length ? `
-    <div class="card" style="border-left:3px solid var(--amber)">
-      <div class="card-title"><i class="ti ti-id-badge" style="color:var(--amber)"></i> Driver Licenses (${drv.length})</div>
-      ${drv.map(d => {
-        const days = daysLeft(d.license_expiry);
-        return `<div class="list-item">
-          <div class="list-dot amber"><i class="ti ti-id-badge"></i></div>
-          <div class="list-body">
-            <div class="list-title">${d.full_name}</div>
-            <div class="list-sub ${days<=0?'blink':''}" style="color:${days<=0?'var(--red)':'var(--amber)'}">${days<=0?'License EXPIRED':'Expires in '+days+'d'} · ${fmtDate(d.license_expiry)}</div>
-          </div>
-        </div>`;
-      }).join('')}
-    </div>` : ''}
+    <!-- Tab bar -->
+    <div style="display:flex;gap:6px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px">
+      <button class="history-tab active" id="comp-tab-veh" onclick="compTab('veh')">🚛 Vehicles ${veh.length?`<span style="background:var(--red);color:#fff;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px">${veh.length}</span>`:''}
+      </button>
+      <button class="history-tab" id="comp-tab-drv" onclick="compTab('drv')">👤 Drivers ${drv.length?`<span style="background:var(--amber);color:#000;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px">${drv.length}</span>`:''}
+      </button>
+      <button class="history-tab" id="comp-tab-all" onclick="compTab('all')">📋 All Vehicles Registry</button>
+      ${cred.length?`<button class="history-tab" id="comp-tab-cred" onclick="compTab('cred')">💳 Credit Due <span style="background:var(--red);color:#fff;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px">${cred.length}</span></button>`:''}
+    </div>
 
+    <!-- Vehicle alerts table -->
+    <div id="comp-panel-veh">
+      ${veh.length ? `
+      <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead><tr>
+            <th>Plate No.</th><th>Make / Model</th><th>Depot</th>
+            <th>Insurance</th><th>Road Worthy</th><th>Hackney Permit</th><th>V. Licence</th><th>Tracker</th>
+          </tr></thead>
+          <tbody>
+          ${veh.map(v => {
+            const docStatus = (expiry) => {
+              const d = daysLeft(expiry);
+              if (d === null) return '<span style="color:var(--text3)">—</span>';
+              if (d <= 0) return `<span style="color:var(--red);font-weight:700;font-size:11px">EXPIRED<br><small>${fmtDate(expiry)}</small></span>`;
+              if (d <= 30) return `<span style="color:var(--amber);font-weight:600;font-size:11px">${d}d<br><small>${fmtDate(expiry)}</small></span>`;
+              return `<span style="color:var(--green);font-size:11px">${fmtDate(expiry)}</span>`;
+            };
+            return `<tr>
+              <td><strong>${sanitise(v.plate_number||'—')}</strong></td>
+              <td>${sanitise(v.make||'')} ${sanitise(v.model||'')}</td>
+              <td style="font-size:11px">${sanitise(v.depot||'—')}</td>
+              <td>${docStatus(v.insurance_expiry)}</td>
+              <td>${docStatus(v.road_worthiness_expiry)}</td>
+              <td>${docStatus(v.hackney_permit_expiry)}</td>
+              <td>${docStatus(v.vehicle_license_expiry)}</td>
+              <td>${docStatus(v.tracker_expiry)}</td>
+            </tr>`;
+          }).join('')}
+          </tbody>
+        </table>
+      </div>` : '<div class="empty-state" style="padding:40px"><div style="font-size:40px">✅</div><div class="empty-title">All vehicle documents are in order</div></div>'}
+    </div>
+
+    <!-- Driver licence table -->
+    <div id="comp-panel-drv" style="display:none">
+      ${drv.length ? `
+      <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead><tr><th>Driver</th><th>Phone</th><th>Depot</th><th>Licence No.</th><th>Expiry</th><th>Status</th></tr></thead>
+          <tbody>
+          ${drv.map(d => {
+            const days = daysLeft(d.license_expiry);
+            const expired = days !== null && days <= 0;
+            return `<tr>
+              <td><strong>${sanitise(d.full_name||'—')}</strong></td>
+              <td style="font-size:12px">${sanitise(d.phone||'—')}</td>
+              <td style="font-size:12px">${sanitise(d.depot||'—')}</td>
+              <td style="font-size:12px;font-family:monospace">${sanitise(d.license_number||'—')}</td>
+              <td style="font-size:12px;color:${expired?'var(--red)':'var(--amber)'};font-weight:600">${fmtDate(d.license_expiry)}</td>
+              <td><span class="badge badge-${expired?'declined':'pending'}" style="font-size:10px">${expired?'EXPIRED':days+'d left'}</span></td>
+            </tr>`;
+          }).join('')}
+          </tbody>
+        </table>
+      </div>` : '<div class="empty-state" style="padding:40px"><div style="font-size:40px">✅</div><div class="empty-title">All driver licences are valid</div></div>'}
+    </div>
+
+    <!-- Full vehicle registry -->
+    <div id="comp-panel-all" style="display:none">
+      <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead><tr>
+            <th>Plate No.</th><th>Make / Model</th><th>Type</th><th>Depot</th>
+            <th>Insurance</th><th>Road Worthy</th><th>Hackney</th><th>V. Licence</th><th>Tracker</th>
+          </tr></thead>
+          <tbody>
+          ${vehicles.map(v => {
+            const ds = (expiry) => {
+              const d = daysLeft(expiry);
+              if (d === null) return '<span style="color:var(--text3);font-size:10px">—</span>';
+              if (d <= 0) return `<span style="color:var(--red);font-weight:700;font-size:10px">EXPIRED</span><br><small style="color:var(--text3)">${fmtDate(expiry)}</small>`;
+              if (d <= 30) return `<span style="color:var(--amber);font-weight:600;font-size:10px">${d}d</span><br><small style="color:var(--text3)">${fmtDate(expiry)}</small>`;
+              return `<span style="color:var(--green);font-size:10px">${fmtDate(expiry)}</span>`;
+            };
+            return `<tr>
+              <td><strong style="font-size:12px">${sanitise(v.plate_number||'—')}</strong></td>
+              <td style="font-size:11px">${sanitise(v.make||'')} ${sanitise(v.model||'')}</td>
+              <td style="font-size:10px"><span class="badge badge-pending" style="font-size:9px">${v.vehicle_type||'—'}</span></td>
+              <td style="font-size:11px">${sanitise(v.depot||'—')}</td>
+              <td>${ds(v.insurance_expiry)}</td>
+              <td>${ds(v.road_worthiness_expiry)}</td>
+              <td>${ds(v.hackney_permit_expiry)}</td>
+              <td>${ds(v.vehicle_license_expiry)}</td>
+              <td>${ds(v.tracker_expiry)}</td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="9" style="text-align:center;padding:30px;color:var(--text3)">No vehicles registered</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Credit Due panel -->
     ${cred.length ? `
-    <div class="card" style="border-left:3px solid var(--red)">
-      <div class="card-title blink"><i class="ti ti-clock" style="color:var(--red)"></i> Credit Payments Due (${cred.length})</div>
-      ${cred.map(c => `<div class="list-item">
-        <div class="list-dot red"><i class="ti ti-cash"></i></div>
-        <div class="list-body">
-          <div class="list-title">${c.ref_number}</div>
-          <div class="list-sub">${c.description}</div>
-          <div class="list-sub blink" style="color:var(--red)">Due ${fmtDate(c.credit_due_date)}</div>
-        </div>
-        <div class="list-meta"><strong>${fmt(c.amount_to_pay)}</strong></div>
-      </div>`).join('')}
+    <div id="comp-panel-cred" style="display:none">
+      <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead><tr><th>Ref</th><th>Description</th><th>Due Date</th><th style="text-align:right">Amount</th></tr></thead>
+          <tbody>
+          ${cred.map(c=>`<tr>
+            <td><code style="font-size:11px">${sanitise(c.ref_number||'—')}</code></td>
+            <td style="font-size:12px">${sanitise(c.description||'—')}</td>
+            <td style="font-size:12px;color:var(--red);font-weight:600">${fmtDate(c.credit_due_date)}</td>
+            <td style="text-align:right;font-weight:700;font-size:13px">${fmt(c.amount_to_pay)}</td>
+          </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
     </div>` : ''}
   `);
+}
+
+function compTab(tab) {
+  ['veh','drv','all','cred'].forEach(t => {
+    const btn = el('comp-tab-'+t);
+    const panel = el('comp-panel-'+t);
+    if (btn) btn.classList.toggle('active', t===tab);
+    if (panel) panel.style.display = t===tab ? '' : 'none';
+  });
+}
+
+async function showNewComplianceDoc() {
+  const vendors = await api('GET','/api/vendors').catch(()=>[]);
+  showModal('Add Compliance Document', `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Document Type *</label>
+        <select class="form-input" id="ncd-type">
+          <option value="GIT">GIT (Goods-in-Transit Insurance)</option>
+          <option value="Fidelity Guarantee">Fidelity Guarantee</option>
+          <option value="Third Party Insurance">Third Party Insurance</option>
+          <option value="Marine Insurance">Marine Insurance</option>
+          <option value="Public Liability">Public Liability</option>
+          <option value="Other">Other</option>
+        </select></div>
+      <div class="form-group"><label class="form-label">Document Name / Ref *</label>
+        <input class="form-input" id="ncd-name" placeholder="e.g. GIT Policy 2026"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Issue Date</label>
+        <input class="form-input" type="date" id="ncd-issue"></div>
+      <div class="form-group"><label class="form-label">Expiry Date *</label>
+        <input class="form-input" type="date" id="ncd-expiry"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Vendor / Insurer</label>
+      <select class="form-input" id="ncd-vendor">
+        <option value="">— Select vendor —</option>
+        ${vendors.map(v=>`<option value="${v.id}">${sanitise(v.company_name||v.name)}</option>`).join('')}
+        <option value="__manual">Other (enter manually)</option>
+      </select></div>
+    <div class="form-group" id="ncd-vendor-manual" style="display:none">
+      <label class="form-label">Vendor Name (manual)</label>
+      <input class="form-input" id="ncd-vendor-name" placeholder="Insurance company name"></div>
+    <div class="form-group"><label class="form-label">Policy / Certificate No.</label>
+      <input class="form-input" id="ncd-policy" placeholder="e.g. POL-2026-001234"></div>
+    <div class="form-group"><label class="form-label">Coverage Amount (₦)</label>
+      <input class="form-input" type="number" id="ncd-coverage" placeholder="e.g. 50000000"></div>
+    <div class="form-group"><label class="form-label">Notes</label>
+      <input class="form-input" id="ncd-notes" placeholder="Any additional details"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="submitComplianceDoc()">Save Document</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+  el('ncd-vendor')?.addEventListener('change', function() {
+    const manual = el('ncd-vendor-manual');
+    if (manual) manual.style.display = this.value==='__manual' ? '' : 'none';
+  });
+}
+
+async function submitComplianceDoc() {
+  const vendorSel = el('ncd-vendor')?.value;
+  const vendors = await api('GET','/api/vendors').catch(()=>[]);
+  const selectedVendor = vendors.find(v=>String(v.id)===vendorSel);
+  const payload = {
+    doc_type: el('ncd-type')?.value,
+    doc_name: el('ncd-name')?.value,
+    issue_date: el('ncd-issue')?.value || null,
+    expiry_date: el('ncd-expiry')?.value,
+    vendor_id: vendorSel && vendorSel!=='__manual' ? vendorSel : null,
+    vendor_name: selectedVendor?.company_name || el('ncd-vendor-name')?.value || '',
+    policy_number: el('ncd-policy')?.value,
+    coverage_amount: el('ncd-coverage')?.value || null,
+    notes: el('ncd-notes')?.value,
+  };
+  if (!payload.doc_name || !payload.expiry_date) { alert('Document name and expiry date are required'); return; }
+  try {
+    await api('POST', '/api/compliance/documents', payload);
+    closeModal();
+    showToast('Compliance document saved','success');
+    navigate('compliance');
+  } catch(e) { 
+    // Store locally if endpoint not ready
+    const local = JSON.parse(localStorage.getItem('vmo_comp_docs')||'[]');
+    payload.id = Date.now(); payload.created_at = new Date().toISOString();
+    local.push(payload);
+    localStorage.setItem('vmo_comp_docs', JSON.stringify(local));
+    closeModal();
+    showToast('Document saved locally','success');
+  }
 }
 
 // ── CLIENTS ───────────────────────────────────────────────────────────────────
