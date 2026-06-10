@@ -1207,12 +1207,13 @@ async function doLogin() {
   btn.disabled = true;
   try {
     const d = await api('POST', '/api/auth/login', { email, password: pass });
-    if (!d.token || !d.user) throw new Error('Invalid server response');
+    if (!d || !d.token || !d.user) {
+      throw new Error('Login failed — please check your email and password.');
+    }
     token = d.token;
     user  = d.user;
     resetLoginRateLimit();
-    // Validate token before trusting it
-    if (isTokenExpired(token)) throw new Error('Received expired token');
+    if (isTokenExpired(token)) throw new Error('Received an expired session. Please try again.');
     localStorage.setItem('vmo_token', token);
     localStorage.setItem('vmo_user', JSON.stringify(user));
     page = 'dashboard';
@@ -1220,7 +1221,22 @@ async function doLogin() {
     preloadAll();
   } catch(e) {
     btn.disabled = false;
-    renderLogin(e.message);
+    btn.innerHTML = '<i class="ti ti-lock"></i> Sign in to VMO';
+    // Show a friendly message, never expose internal errors
+    const msg = e.message?.toLowerCase() || '';
+    const friendlyMsg =
+      msg.includes('invalid credentials') || msg.includes('check your email')
+        ? 'Email or password is incorrect. Please try again.'
+      : msg.includes('not found') || msg.includes('no user')
+        ? 'No account found with that email address.'
+      : msg.includes('rate') || msg.includes('too many')
+        ? 'Too many login attempts. Please wait a few minutes.'
+      : msg.includes('expired')
+        ? 'Your session expired. Please log in again.'
+      : msg.includes('server')
+        ? 'The server is temporarily unavailable. Please try again.'
+      : e.message || 'Something went wrong. Please try again.';
+    renderLogin(friendlyMsg);
   }
 }
 
