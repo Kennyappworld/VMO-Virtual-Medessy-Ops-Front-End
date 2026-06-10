@@ -7670,7 +7670,8 @@ async function pgTrips() {
   window._filterCompany = null; // reset
 
   html('topbar-btn', `
-    <div style="display:flex;gap:6px">
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" onclick="showWaybillDownload()" style="font-size:11px"><i class="ti ti-file-download"></i> Waybills</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadTripTemplate()" style="font-size:11px"><i class="ti ti-download"></i> Template</button>
       <button class="btn btn-ghost btn-sm" onclick="showUploadTrips()" style="font-size:11px"><i class="ti ti-upload"></i> Upload</button>
       <button class="topbar-action" onclick="showNewTrip()" title="Log new trip"><i class="ti ti-plus"></i></button>
@@ -7679,13 +7680,20 @@ async function pgTrips() {
 
   // Company selector
   html('page-content', `
-    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+    <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap">
       <select class="form-input" id="trip-co" style="flex:1;min-width:140px" onchange="loadTripsForCompany()">
         <option value="">All companies</option>
         ${companies.map(c=>`<option value="${c.id}" ${c.id==defaultCompId?'selected':''}>${c.name}</option>`).join('')}
       </select>
       <input type="month" class="form-input" id="trip-month" style="width:140px" value="${new Date().toISOString().slice(0,7)}" onchange="loadTripsForCompany()">
       <button class="btn btn-ghost btn-sm" onclick="exportTrips()"><i class="ti ti-file-spreadsheet"></i> Excel</button>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+      ${['all','loading','in_transit','completed','closed'].map(s=>`
+        <button data-ts="${s}" onclick="filterTripsByStatus('${s}')" class="group-chip ${s==='all'?'active':''}">
+          ${s==='all'?'All Trips':s==='loading'?'🔴 Loading':s==='in_transit'?'🟡 In Transit':s==='completed'?'🟢 Returned':s==='closed'?'✅ Closed':''}
+        </button>`).join('')}
+      <span id="open-trips-count" style="font-size:11px;color:var(--red);font-weight:700;padding:4px 8px;background:rgba(239,68,68,.1);border-radius:8px;display:none"></span>
     </div>
     <div id="trip-summary"></div>
     <div id="trip-list"><div class="loading-state"><div class="spinner"></div></div></div>
@@ -7718,35 +7726,112 @@ async function loadTripsForCompany() {
 
   const REASON_CODES = {'01':'To Trip','02':'From Trip','03':'At Customer','04':'On Site','05':'Break Down','06':'Task Force/Police','07':'Dispatch Delay','08':'Driver Idling','09':'No Driver'};
 
+  // Update open trips count badge
+  const openCount = trips.filter(t => t.trip_status && !['closed'].includes(t.trip_status)).length;
+  const badge = el('open-trips-count');
+  if (badge) {
+    badge.style.display = openCount > 0 ? '' : 'none';
+    badge.textContent = openCount + ' open trip' + (openCount!==1?'s':'') + ' — trucks on road';
+  }
+
   html('trip-list', trips.length ? `
-    ${trips.map(t => `<div class="list-item" style="padding:12px;margin-bottom:8px">
-      <div class="list-dot ${t.availability_code&&t.availability_code!=='01'?'red':'green'}">
-        <i class="ti ti-map-route"></i>
-      </div>
-      <div class="list-body">
-        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">
-          <strong style="font-size:13px">${t.plate_number||'—'}</strong>
-          ${t.shipment_number?`<span style="font-family:monospace;font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:4px">#${t.shipment_number}</span>`:''}
-          ${t.company_name?`<span style="font-size:11px;color:var(--accent)">${t.company_name}</span>`:''}
-        </div>
-        <div style="font-size:13px;font-weight:600;color:var(--text)">${t.customer_name}</div>
-        <div style="font-size:12px;color:var(--text3)">${t.customer_phone||''} ${t.area?'· '+t.area:''}</div>
-        <div style="font-size:12px;color:var(--text2);margin-top:2px">${t.loading_site||'—'} → ${t.offloading_site||'—'}</div>
-        ${t.waybill_number?`<div style="font-size:11px;color:var(--text3)">Waybill: ${t.waybill_number}</div>`:''}
-        <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
-          <span style="font-size:11px;color:var(--text3)">${fmtDate(t.trip_date)}</span>
-          ${t.to_km?`<span style="font-size:11px;color:var(--text3)">${t.to_km}km</span>`:''}
-          ${t.total_diesel?`<span style="font-size:11px;color:var(--amber)">${t.total_diesel}L diesel</span>`:''}
-          ${t.availability_code&&t.availability_code!=='01'?`<span class="badge badge-declined" style="font-size:10px">${REASON_CODES[t.availability_code]||t.availability_code}</span>`:''}
-        </div>
-      </div>
-      <div class="list-meta">
-        <strong style="font-size:14px;color:var(--green)">${fmt((+t.outward_value||0)+(+t.return_value||0))}</strong>
-        ${t.diesel_amount?`<div style="font-size:11px;color:var(--red);margin-top:2px">-${fmt(t.diesel_amount)}</div>`:''}
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">${t.driver_name||'—'}</div>
-      </div>
-    </div>`).join('')}
+    <div style="overflow-x:auto">
+      <table class="data-table" style="min-width:900px">
+        <thead><tr style="font-size:10px">
+          <th>Status</th><th>Date</th><th>Waybill</th><th>Plate</th><th>Driver</th>
+          <th>Company</th><th>From</th><th>To</th><th>Customer</th>
+          <th style="text-align:right">Freight</th><th style="text-align:right">Diesel</th>
+          <th>Docs</th><th></th>
+        </tr></thead>
+        <tbody>
+        ${trips.map(t => {
+          const freight = (+t.outward_value||0)+(+t.return_value||0);
+          const isClosed = t.trip_status==='closed';
+          const isLoading = t.trip_status==='loading';
+          let loadDocs = 0, closeDocs = 0;
+          try { loadDocs = t.loading_waybill_docs ? JSON.parse(t.loading_waybill_docs).length : 0; } catch(e){}
+          try { closeDocs = t.closing_waybill_docs ? JSON.parse(t.closing_waybill_docs).length : 0; } catch(e){}
+          return `<tr style="cursor:pointer" onclick="showTripDetailModal(${t.id})">
+            <td>
+              <span class="badge badge-${isClosed?'approved':isLoading?'declined':'pending'}" style="font-size:9px;white-space:nowrap">
+                ${isClosed?'✅ Closed':isLoading?'🔴 Loading':'🟡 Transit'}
+              </span>
+            </td>
+            <td style="font-size:11px;white-space:nowrap">${fmtDate(t.trip_date)}</td>
+            <td style="font-family:monospace;font-size:11px;color:var(--accent)">${sanitise(t.waybill_number||'—')}</td>
+            <td><strong style="font-size:12px">${sanitise(t.plate_number||'—')}</strong></td>
+            <td style="font-size:11px">${sanitise(t.driver_name||'—')}</td>
+            <td style="font-size:11px">${sanitise(t.company_name||'—')}</td>
+            <td style="font-size:11px">${sanitise(t.loading_site||'—')}</td>
+            <td style="font-size:11px">${sanitise(t.offloading_site||'—')}</td>
+            <td style="font-size:11px">${sanitise(t.customer_name||'—')}</td>
+            <td style="text-align:right;color:var(--green);font-weight:700">${fmt(freight)}</td>
+            <td style="text-align:right;color:var(--amber);font-size:11px">${t.total_diesel||'—'}</td>
+            <td style="font-size:10px;white-space:nowrap">
+              ${loadDocs>0?`<span style="color:var(--green)">📎${loadDocs}</span>`:'<span style="color:var(--red)">⚠ No WB</span>'}
+              ${closeDocs>0?`<span style="color:var(--blue);margin-left:4px">✓${closeDocs}</span>`:''}
+            </td>
+            <td style="white-space:nowrap" onclick="event.stopPropagation()">
+              ${!isClosed ? `<button class="btn btn-success btn-sm" style="font-size:10px;padding:3px 8px" onclick="showCloseTripModal(${t.id})" title="Close trip">
+                <i class="ti ti-circle-check"></i> Close
+              </button>` : ''}
+            </td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
+    </div>
   ` : '<div class="empty-state"><div class="empty-icon"><i class="ti ti-map-route"></i></div><div class="empty-title">No trips logged yet</div><div class="empty-sub">Use + to log a new trip</div></div>');
+}
+
+function showTripDetailModal(id) {
+  const t = (window._currentTrips||[]).find(x=>x.id===id);
+  if (!t) return;
+  const freight = (+t.outward_value||0)+(+t.return_value||0);
+  const net = freight - (+t.diesel_amount||0);
+  let loadDocs = [], closeDocs = [];
+  try { loadDocs = JSON.parse(t.loading_waybill_docs||'[]'); } catch(e){}
+  try { closeDocs = JSON.parse(t.closing_waybill_docs||'[]'); } catch(e){}
+
+  showModal(`Trip — ${t.waybill_number||'#'+id}`, `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+      ${[
+        ['Trip Date', t.trip_date?new Date(t.trip_date).toLocaleDateString('en-GB'):'—'],
+        ['Status', t.trip_status||'—'],
+        ['Plate No.', t.plate_number||'—'],
+        ['Driver', t.driver_name||'—'],
+        ['Waybill No.', t.waybill_number||'—'],
+        ['Invoice No.', t.invoice_number||'—'],
+        ['Company', t.company_name||'—'],
+        ['Shipment No.', t.shipment_number||'—'],
+        ['From', t.loading_site||'—'],
+        ['To', t.offloading_site||'—'],
+        ['Customer', t.customer_name||'—'],
+        ['Phone', t.customer_phone||'—'],
+        ['Load', t.load_description||'—'],
+        ['Km', t.to_km||'—'],
+        ['Gross Freight', fmt(freight)],
+        ['Diesel (L)', t.total_diesel||'—'],
+        ['Diesel Cost', t.diesel_amount?fmt(t.diesel_amount):'—'],
+        ['Net', fmt(net)],
+      ].map(([l,v])=>`<div style="background:var(--bg3);border-radius:8px;padding:9px">
+        <div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-bottom:2px">${l}</div>
+        <div style="font-size:12px;font-weight:600;color:var(--text)">${sanitise(String(v))}</div>
+      </div>`).join('')}
+    </div>
+    ${loadDocs.length ? `<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:6px">📎 Loading Waybill Documents</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${loadDocs.map((d,i)=>`<a href="${d.data}" download="${d.name||'waybill_'+i}" class="btn btn-ghost btn-sm" style="font-size:11px"><i class="ti ti-download"></i> ${d.name||'Doc '+(i+1)}</a>`).join('')}
+      </div></div>` : '<div style="background:rgba(239,68,68,.08);border-radius:8px;padding:8px;margin-bottom:8px;font-size:12px;color:var(--red)">⚠ No loading waybill attached</div>'}
+    ${closeDocs.length ? `<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:6px">✅ Closing (Acknowledged) Documents</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${closeDocs.map((d,i)=>`<a href="${d.data}" download="${d.name||'closing_'+i}" class="btn btn-ghost btn-sm" style="font-size:11px"><i class="ti ti-download"></i> ${d.name||'Doc '+(i+1)}</a>`).join('')}
+      </div></div>` : ''}
+    <div style="display:flex;gap:8px">
+      ${t.trip_status!=='closed' ? `<button class="btn btn-success btn-sm" onclick="closeModal();showCloseTripModal(${id})"><i class="ti ti-circle-check"></i> Close Trip</button>` : ''}
+      <button class="btn btn-ghost btn-sm btn-block" onclick="closeModal()">Close</button>
+    </div>
+  `, 'lg');
 }
 
 function exportTrips() {
@@ -8188,8 +8273,482 @@ function exportDebitSheet() {
   a.click();
 }
 
+
+// ── TRIP ENFORCEMENT SYSTEM ───────────────────────────────────────────────────
+
+function filterTripsByStatus(status) {
+  document.querySelectorAll('[data-ts]').forEach(b => b.classList.toggle('active', b.dataset.ts===status));
+  window._tripStatusFilter = status;
+  const all = window._currentTrips || [];
+  const filtered = status==='all' ? all : all.filter(t => (t.trip_status||'completed')===status);
+  renderTripList(filtered);
+}
+
+async function checkVehicleOpenTrip(vehicleId, vehiclePlate) {
+  // Check if this vehicle has an open (non-closed) trip
+  const trips = await api('GET', `/api/trips?vehicle_id=${vehicleId}&status=open`).catch(()=>[]);
+  const open = trips.find(t => !['closed'].includes(t.trip_status||''));
+  return open || null;
+}
+
 async function showNewTrip() {
   const companies = window._tripCompanies || await api('GET','/api/companies').catch(()=>[]);
+  const firstCo = companies[0];
+  let coVehicles = [], coDrivers = [];
+  if (firstCo) {
+    [coVehicles, coDrivers] = await Promise.all([
+      api('GET',`/api/companies/${firstCo.id}/vehicles`).catch(()=>[]),
+      api('GET',`/api/companies/${firstCo.id}/drivers`).catch(()=>[]),
+    ]);
+  }
+  const REASON_CODES = [['01','To Trip'],['02','From Trip'],['03','At Customer'],['04','On Site'],['05','Break Down'],['06','Task Force/Police'],['07','Dispatch Delay'],['08','Driver Idling'],['09','No Driver']];
+  const today = new Date().toISOString().slice(0,10);
+
+  showModal('Log New Trip', `
+    <div style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.25);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:var(--gold)">
+      <i class="ti ti-alert-triangle" style="margin-right:5px"></i>
+      <strong>Waybill required.</strong> You must attach the loading waybill (up to 4 documents) before this trip can be saved.
+    </div>
+
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Company / Unit *</label>
+        <select class="form-input" id="nt-co" onchange="loadCompanyAssets()">
+          ${companies.map(c=>`<option value="${c.id}">${sanitise(c.name)}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Trip Date *</label>
+        <input class="form-input" type="date" id="nt-date" value="${today}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">① Waybill No. *</label>
+        <input class="form-input" id="nt-waybill" placeholder="WB-2026-001"></div>
+      <div class="form-group"><label class="form-label">② Invoice Number</label>
+        <input class="form-input" id="nt-invoice" placeholder="INV-2026-001"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">④ Vehicle Reg No. *</label>
+        <select class="form-input" id="nt-veh" onchange="checkVehicleTripStatus(this)">
+          <option value="">— Select vehicle —</option>
+          ${coVehicles.map(v=>`<option value="${v.id}">${v.plate_number}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Driver *</label>
+        <select class="form-input" id="nt-drv">
+          ${coDrivers.map(d=>`<option value="${d.id}">${d.full_name||d.name}</option>`).join('')}
+        </select></div>
+    </div>
+    <div id="nt-vehicle-warning" style="display:none;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px;margin-bottom:8px;font-size:12px;color:var(--red)"></div>
+
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">⑤ Loading Location</label>
+        <input class="form-input" id="nt-load" placeholder="e.g. ABINBEV ONITSHA"></div>
+      <div class="form-group"><label class="form-label">⑥ Destination</label>
+        <input class="form-input" id="nt-offload" placeholder="e.g. Warri"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">⑦ Distance (km)</label>
+        <input class="form-input" id="nt-km" type="number" placeholder="57"></div>
+      <div class="form-group"><label class="form-label">Transit hrs (each way)</label>
+        <input class="form-input" id="nt-transit" type="number" placeholder="2.5"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">⑬ Customer Name *</label>
+        <input class="form-input" id="nt-cust" placeholder="e.g. JUNDO BROTHERS"></div>
+      <div class="form-group"><label class="form-label">⑭ Customer Phone</label>
+        <input class="form-input" id="nt-phone" type="tel" placeholder="08012345678"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Shipment No.</label>
+        <input class="form-input" id="nt-ship" placeholder="285029"></div>
+      <div class="form-group"><label class="form-label">Load Details</label>
+        <input class="form-input" id="nt-load-desc" placeholder="e.g. Corn Malt 15 tons"></div>
+    </div>
+
+    <!-- LOADING WAYBILL ATTACHMENT — COMPULSORY -->
+    <div style="background:rgba(239,68,68,.06);border:1.5px solid rgba(239,68,68,.3);border-radius:10px;padding:12px;margin:10px 0">
+      <div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+        📎 Loading Waybill — COMPULSORY (up to 4 documents)
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Snap or attach the waybill before the truck leaves. Trip cannot be saved without at least one waybill document.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        ${[1,2,3,4].map(i=>`
+        <div>
+          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:4px">Document ${i}${i===1?' *':' (optional)'}</label>
+          <input type="file" id="nt-waybill-doc-${i}" accept="image/*,application/pdf" class="form-input" style="padding:6px;font-size:11px">
+          <div id="nt-waybill-preview-${i}" style="margin-top:4px;font-size:10px;color:var(--green)"></div>
+        </div>`).join('')}
+      </div>
+    </div>
+
+    <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px">⏱ Timestamps (fill on return)</div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Plant Arrival</label>
+        <input class="form-input" type="datetime-local" id="nt-plant-arr" oninput="calcWaitTimes()"></div>
+      <div class="form-group"><label class="form-label">Plant Departure</label>
+        <input class="form-input" type="datetime-local" id="nt-plant-dep" oninput="calcWaitTimes()"></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">In-Plant Wait (hrs) — auto</label>
+      <input class="form-input" id="nt-plant-wait" readonly style="background:var(--bg3)">
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Depot/Customer Arrival</label>
+        <input class="form-input" type="datetime-local" id="nt-depot-arr" oninput="calcWaitTimes()"></div>
+      <div class="form-group"><label class="form-label">Customer Departure</label>
+        <input class="form-input" type="datetime-local" id="nt-depot-dep" oninput="calcWaitTimes()"></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Customer Wait (hrs) — auto</label>
+      <input class="form-input" id="nt-cust-wait" readonly style="background:var(--bg3)">
+    </div>
+
+    <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px">💰 Revenue & Fuel</div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Rate (₦)</label>
+        <input class="form-input" id="nt-rate" type="number" placeholder="0"></div>
+      <div class="form-group"><label class="form-label">Outward Value (₦)</label>
+        <input class="form-input" id="nt-outval" type="number" placeholder="0"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Total Diesel (L)</label>
+        <input class="form-input" id="nt-diesel" type="number" placeholder="0"></div>
+      <div class="form-group"><label class="form-label">Area / Region</label>
+        <input class="form-input" id="nt-area" placeholder="e.g. Delta, Anambra"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Notes</label>
+      <input class="form-input" id="nt-notes" placeholder="Additional info..."></div>
+
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-primary btn-block" onclick="submitNewTripEnforced()">Save Trip & Mark Loading</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `, 'lg');
+}
+
+async function checkVehicleTripStatus(sel) {
+  const vehicleId = sel.value;
+  const warn = el('nt-vehicle-warning');
+  if (!vehicleId || !warn) return;
+  warn.style.display = 'none';
+  try {
+    const openTrips = await api('GET', `/api/trips?vehicle_id=${vehicleId}&open=1`).catch(()=>[]);
+    const open = openTrips.find(t => t.trip_status && !['closed'].includes(t.trip_status));
+    if (open) {
+      const vName = user?.full_name || user?.name || 'User';
+      warn.style.display = '';
+      warn.innerHTML = `<i class="ti ti-alert-circle" style="margin-right:6px"></i>
+        <strong>${vName}</strong>, this vehicle has an open trip (${sanitise(open.waybill_number||'#'+open.id)}) 
+        that has not been closed out. Please close the previous trip and debit record before loading this truck again.`;
+    }
+  } catch(e) {}
+}
+
+async function submitNewTripEnforced() {
+  // 1. Check waybill document attached
+  const doc1 = el('nt-waybill-doc-1')?.files?.[0];
+  if (!doc1) {
+    alert('Please attach at least one loading waybill document before saving the trip.');
+    return;
+  }
+
+  // 2. Check required fields
+  if (!el('nt-waybill')?.value) { alert('Waybill number is required'); return; }
+  if (!el('nt-cust')?.value) { alert('Customer name is required'); return; }
+  if (!el('nt-veh')?.value) { alert('Please select a vehicle'); return; }
+
+  // 3. Check vehicle has no open trip
+  const vehicleId = el('nt-veh')?.value;
+  try {
+    const openTrips = await api('GET', `/api/trips?vehicle_id=${vehicleId}&open=1`).catch(()=>[]);
+    const open = openTrips.find(t => t.trip_status && !['closed'].includes(t.trip_status));
+    if (open) {
+      const vName = user?.full_name || user?.name || 'User';
+      alert(`${vName}, please close out on the previous trip (${open.waybill_number||'#'+open.id}) by completing the trip details and debit record before loading this truck again.`);
+      return;
+    }
+  } catch(e) {}
+
+  // 4. Convert waybill docs to base64
+  const waybillDocs = [];
+  for (let i=1; i<=4; i++) {
+    const f = el(`nt-waybill-doc-${i}`)?.files?.[0];
+    if (f) {
+      const b64 = await fileToBase64(f);
+      waybillDocs.push({ name: f.name, type: f.type, data: b64 });
+    }
+  }
+
+  const payload = {
+    trip_date: el('nt-date')?.value,
+    company_id: el('nt-co')?.value,
+    waybill_number: el('nt-waybill')?.value,
+    invoice_number: el('nt-invoice')?.value,
+    vehicle_id: vehicleId,
+    driver_id: el('nt-drv')?.value,
+    loading_site: el('nt-load')?.value,
+    offloading_site: el('nt-offload')?.value,
+    to_km: el('nt-km')?.value,
+    standard_transit_hrs: el('nt-transit')?.value,
+    customer_name: el('nt-cust')?.value,
+    customer_phone: el('nt-phone')?.value,
+    shipment_number: el('nt-ship')?.value,
+    load_description: el('nt-load-desc')?.value,
+    plant_arrival: el('nt-plant-arr')?.value,
+    plant_departure: el('nt-plant-dep')?.value,
+    depot_arrival: el('nt-depot-arr')?.value,
+    depot_departure: el('nt-depot-dep')?.value,
+    rate: el('nt-rate')?.value,
+    outward_value: el('nt-outval')?.value,
+    total_diesel: el('nt-diesel')?.value,
+    area: el('nt-area')?.value,
+    notes: el('nt-notes')?.value,
+    trip_status: 'loading',
+    loading_waybill_docs: JSON.stringify(waybillDocs),
+  };
+
+  try {
+    clearCache();
+    await api('POST', '/api/trips', payload);
+    closeModal();
+    showToast('Trip logged — truck marked as Loading ✅','success');
+    navigate('trips');
+  } catch(e) { alert(e.message||'Failed to save trip'); }
+}
+
+function fileToBase64(file) {
+  return new Promise((res,rej) => {
+    const reader = new FileReader();
+    reader.onload = e => res(e.target.result);
+    reader.onerror = rej;
+    reader.readAsDataURL(file);
+  });
+}
+
+// ── CLOSE TRIP MODAL ──────────────────────────────────────────────────────────
+async function showCloseTripModal(tripId) {
+  const trip = (window._currentTrips||[]).find(t=>t.id===tripId);
+  if (!trip) return;
+
+  showModal(`Close Trip — ${sanitise(trip.waybill_number||'#'+tripId)}`, `
+    <div style="background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.25);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:var(--green)">
+      <i class="ti ti-circle-check" style="margin-right:5px"></i>
+      Truck has returned. Attach the <strong>acknowledged waybill</strong> and complete the debit record to release this truck for the next load.
+    </div>
+
+    <!-- CLOSING WAYBILL — COMPULSORY -->
+    <div style="background:rgba(239,68,68,.06);border:1.5px solid rgba(239,68,68,.3);border-radius:10px;padding:12px;margin-bottom:12px">
+      <div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+        📎 Acknowledged Waybill — COMPULSORY (up to 4 documents)
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        ${[1,2,3,4].map(i=>`
+        <div>
+          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:4px">Document ${i}${i===1?' *':' (optional)'}</label>
+          <input type="file" id="ct-doc-${i}" accept="image/*,application/pdf" class="form-input" style="padding:6px;font-size:11px">
+        </div>`).join('')}
+      </div>
+    </div>
+
+    <!-- DEBIT RECORD -->
+    <div style="background:rgba(201,168,76,.06);border:1.5px solid rgba(201,168,76,.25);border-radius:10px;padding:12px;margin-bottom:12px">
+      <div style="font-size:11px;font-weight:700;color:var(--gold);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">
+        💰 Debit Record — Required
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-bottom:10px">
+        Fill the debit values below. If no debit applies, tick the checkbox.
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer">
+        <input type="checkbox" id="ct-no-debit" onchange="toggleDebitFields()" style="width:16px;height:16px">
+        <span style="font-size:12px;color:var(--text)">No debit for this trip</span>
+      </label>
+      <div id="ct-debit-fields">
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Return Plant Arrival</label>
+            <input class="form-input" type="datetime-local" id="ct-return-arr"></div>
+          <div class="form-group"><label class="form-label">Customer Departure Time</label>
+            <input class="form-input" type="datetime-local" id="ct-depot-dep"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Outward Value (₦)</label>
+            <input class="form-input" type="number" id="ct-outval" placeholder="0" value="${trip.outward_value||''}"></div>
+          <div class="form-group"><label class="form-label">Return Value (₦)</label>
+            <input class="form-input" type="number" id="ct-retval" placeholder="0" value="${trip.return_value||''}"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Total Diesel (L)</label>
+            <input class="form-input" type="number" id="ct-diesel" placeholder="0" value="${trip.total_diesel||''}"></div>
+          <div class="form-group"><label class="form-label">Diesel Amount (₦)</label>
+            <input class="form-input" type="number" id="ct-diesel-amt" placeholder="0" value="${trip.diesel_amount||''}"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">BIT Allowance (₦)</label>
+            <input class="form-input" type="number" id="ct-bit" placeholder="0" value="${trip.bit_allowance||''}"></div>
+          <div class="form-group"><label class="form-label">Other Deductions (₦)</label>
+            <input class="form-input" type="number" id="ct-other" placeholder="0"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Closing Notes</label>
+          <input class="form-input" id="ct-notes" placeholder="e.g. Truck returned in good condition"></div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn btn-primary btn-block" onclick="submitCloseTrip(${tripId})">
+        <i class="ti ti-circle-check"></i> Close Trip & Release Truck
+      </button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `, 'lg');
+}
+
+function toggleDebitFields() {
+  const noDebit = el('ct-no-debit')?.checked;
+  const fields = el('ct-debit-fields');
+  if (fields) fields.style.opacity = noDebit ? '0.3' : '1';
+  if (fields) fields.style.pointerEvents = noDebit ? 'none' : '';
+}
+
+async function submitCloseTrip(tripId) {
+  // 1. Check acknowledged waybill attached
+  const doc1 = el('ct-doc-1')?.files?.[0];
+  if (!doc1) {
+    alert('Please attach at least one acknowledged waybill document to close this trip.');
+    return;
+  }
+
+  // 2. Check debit record filled or no-debit ticked
+  const noDebit = el('ct-no-debit')?.checked;
+  const outval = el('ct-outval')?.value;
+  const retval = el('ct-retval')?.value;
+  if (!noDebit && !outval && !retval) {
+    alert('Please fill the debit values (outward value, return value etc.) or tick "No debit for this trip".');
+    return;
+  }
+
+  // 3. Convert closing docs to base64
+  const closingDocs = [];
+  for (let i=1; i<=4; i++) {
+    const f = el(`ct-doc-${i}`)?.files?.[0];
+    if (f) {
+      const b64 = await fileToBase64(f);
+      closingDocs.push({ name: f.name, type: f.type, data: b64 });
+    }
+  }
+
+  const payload = {
+    trip_status: 'closed',
+    closing_waybill_docs: JSON.stringify(closingDocs),
+    no_debit: noDebit,
+    return_plant_arrival: el('ct-return-arr')?.value || null,
+    depot_departure: el('ct-depot-dep')?.value || null,
+    outward_value: noDebit ? 0 : (el('ct-outval')?.value || 0),
+    return_value: noDebit ? 0 : (el('ct-retval')?.value || 0),
+    total_diesel: noDebit ? null : (el('ct-diesel')?.value || null),
+    diesel_amount: noDebit ? null : (el('ct-diesel-amt')?.value || null),
+    bit_allowance: noDebit ? null : (el('ct-bit')?.value || null),
+    other_deductions: noDebit ? null : (el('ct-other')?.value || null),
+    closing_notes: el('ct-notes')?.value || '',
+    closed_by: user?.full_name || user?.name || '',
+    closed_at: new Date().toISOString(),
+  };
+
+  try {
+    clearCache();
+    await api('PATCH', `/api/trips/${tripId}`, payload);
+    closeModal();
+    showToast('Trip closed ✅ Truck is now free for next load','success');
+    navigate('trips');
+  } catch(e) { alert(e.message||'Failed to close trip'); }
+}
+
+// ── WAYBILL DOWNLOAD CENTRE ───────────────────────────────────────────────────
+async function showWaybillDownload() {
+  const companies = await api('GET','/api/companies').catch(()=>[]);
+  const now = new Date();
+  const mtdFrom = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-01';
+  const today = now.toISOString().slice(0,10);
+
+  showModal('Waybill Download Centre', `
+    <div style="font-size:12px;color:var(--text3);margin-bottom:12px">
+      Download loading waybills and closing waybills for any date range. Filter by status or company.
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">From Date</label>
+        <input class="form-input" type="date" id="wb-from" value="${mtdFrom}"></div>
+      <div class="form-group"><label class="form-label">To Date</label>
+        <input class="form-input" type="date" id="wb-to" value="${today}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Company</label>
+        <select class="form-input" id="wb-co">
+          <option value="">All companies</option>
+          ${companies.map(c=>`<option value="${c.id}">${sanitise(c.name)}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Trip Status</label>
+        <select class="form-input" id="wb-status">
+          <option value="">All</option>
+          <option value="loading">Loading (open)</option>
+          <option value="in_transit">In Transit</option>
+          <option value="closed">Closed</option>
+        </select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Waybill Type</label>
+        <select class="form-input" id="wb-type">
+          <option value="all">All waybills</option>
+          <option value="loading">Loading waybills only</option>
+          <option value="closing">Closing (acknowledged) only</option>
+        </select></div>
+      <div class="form-group"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="downloadWaybillReport()"><i class="ti ti-download"></i> Download Report (CSV)</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+async function downloadWaybillReport() {
+  const from = el('wb-from')?.value;
+  const to = el('wb-to')?.value;
+  const coId = el('wb-co')?.value;
+  const status = el('wb-status')?.value;
+  const wbType = el('wb-type')?.value;
+
+  let trips = await api('GET', `/api/trips?from=${from}&to=${to}${coId?'&company_id='+coId:''}`).catch(()=>[]);
+  if (status) trips = trips.filter(t => (t.trip_status||'completed')===status);
+
+  const headers = [
+    'Trip Date','Waybill No','Invoice No','Plate No','Driver','Company',
+    'Loading Site','Destination','Customer','Shipment No',
+    'Trip Status','Loading Docs','Closing Docs','Debit Filled','Outward (₦)','Return (₦)','Diesel (L)','Net (₦)'
+  ];
+
+  const rows = trips.map(t => {
+    const freight = (+t.outward_value||0)+(+t.return_value||0);
+    const net = freight - (+t.diesel_amount||0);
+    let loadingDocs = '—', closingDocs = '—';
+    try { loadingDocs = t.loading_waybill_docs ? JSON.parse(t.loading_waybill_docs).length+' doc(s)' : '—'; } catch(e){}
+    try { closingDocs = t.closing_waybill_docs ? JSON.parse(t.closing_waybill_docs).length+' doc(s)' : '—'; } catch(e){}
+    return [
+      t.trip_date?new Date(t.trip_date).toLocaleDateString('en-GB'):'',
+      t.waybill_number||'', t.invoice_number||'', t.plate_number||'',
+      t.driver_name||'', t.company_name||'', t.loading_site||'', t.offloading_site||'',
+      t.customer_name||'', t.shipment_number||'',
+      t.trip_status||'', loadingDocs, closingDocs,
+      t.no_debit?'No Debit':t.outward_value?'Yes':'Pending',
+      t.outward_value||0, t.return_value||0, t.total_diesel||0, net
+    ];
+  });
+
+  const csv = [headers,...rows].map(r=>r.map(c=>`"${String(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `VMO_Waybills_${from}_to_${to}.csv`;
+  a.click();
+  closeModal();
+  showToast(`${trips.length} trip(s) exported`,'success');
+}
+
+('GET','/api/companies').catch(()=>[]);
   const firstCo = companies[0];
   let coVehicles = [], coDrivers = [];
   if (firstCo) {
