@@ -14,6 +14,7 @@
 <meta name="theme-color" content="#0d0f17">
 <meta name="robots" content="noindex, nofollow">
 <title>VMO — Medessy Operations</title>
+<!-- VMO v14.2 build:20260610 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&family=DM+Mono:wght@400;500&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,700;0,9..144,900;1,9..144,300&display=swap" rel="stylesheet">
@@ -799,6 +800,47 @@ textarea.form-input { resize: vertical; min-height: 80px; line-height: 1.5; }
   .print-qr-card { page-break-after:always; }
 }
 
+
+/* ── DASHBOARD GREETING ────────────────────────────────────────── */
+.dash-greeting {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.dash-hi {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
+.dash-date {
+  font-size: 12px;
+  color: var(--text3);
+}
+
+
+/* ── COMPANY CHIP COUNTS ─────────────────────────────────────── */
+.chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--ink4);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text3);
+  margin-left: 4px;
+}
+.group-chip.active .chip-count {
+  background: var(--gold);
+  color: var(--bg);
+}
+
 </style>
 </head>
 <body>
@@ -973,7 +1015,23 @@ async function api(method, path, body) {
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(API + path, opts);
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || d.message || 'Request failed ' + r.status);
+  if (!r.ok) {
+    // Session expired — clear token and redirect to login
+    if (r.status === 401) {
+      token = null; user = null;
+      localStorage.removeItem('vmo_token');
+      localStorage.removeItem('vmo_user');
+      render();
+      return;
+    }
+    // 403 — friendly permission message
+    if (r.status === 403) throw new Error("You don't have permission to do that.");
+    // 429 — rate limited
+    if (r.status === 429) throw new Error('Too many requests — please wait a moment and try again.');
+    // 500+ — server error without leaking internals
+    if (r.status >= 500) throw new Error('Something went wrong on our end. Please try again.');
+    throw new Error(d.error || d.message || "That request didn't go through. Please try again.");
+  }
   if (method === 'GET') cache[key] = { data: d, ts: Date.now() };
   return d;
 }
@@ -1312,7 +1370,7 @@ async function loadPage(p) {
     html('page-content', `
       <div class="error-state">
         <div style="font-size:56px">${offline?'🔌':'⚠️'}</div>
-        <div style="font-size:17px;font-weight:700;color:var(--text)">${offline?'No connection':'Something went wrong'}</div>
+        <div style="font-size:17px;font-weight:700;color:var(--text)">${offline?'No connection':'Something went wrong — please try again'}</div>
         <div style="font-size:13px;color:var(--text3);margin-bottom:8px">${e.message}</div>
         ${offline?'<div style="font-size:12px;color:var(--text3);margin-bottom:16px">The server may be waking up. Wait 30 seconds and retry.</div>':''}
         <button class="btn btn-primary" onclick="loadPage('${p}')"><i class="ti ti-refresh"></i> Retry</button>
@@ -1322,152 +1380,148 @@ async function loadPage(p) {
 
 // ── DASHBOARD ────────────────────────────────────────────────────────────────
 async function pgDashboard() {
-  // Load dashboard stats first - fast query
   const dash = await api('GET', '/api/analytics/dashboard').catch(() => ({}));
-
-  // Render immediately with stats, show compliance loading separately
-  const alerts = { vehicles: [], drivers: [], credit_due: [] };
   const allowed = allowedPages().map(p => p.id);
-  const overdueCount = (alerts.credit_due||[]).length + (alerts.drivers||[]).filter(d => daysLeft(d.license_expiry) <= 7).length + (alerts.vehicles||[]).length;
+
+  // Greet the user warmly based on time of day
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const firstName = (user.full_name || user.name || '').split(' ')[0];
+
+  // Build the quick-actions list — only include pages this user can access
+  const actions = [
+    { page:'requests',  icon:'ti-file-plus',       bg:'rgba(245,158,11,.15)',  color:'var(--amber)',  label:'New Payment' },
+    { page:'fuel',      icon:'ti-gas-station',      bg:'rgba(16,185,129,.15)', color:'var(--green)',  label:'Fuel Request' },
+    { page:'trips',     icon:'ti-route',            bg:'rgba(79,142,247,.15)', color:'var(--accent)', label:'Trip Log' },
+    { page:'companies', icon:'ti-truck',            bg:'rgba(139,92,246,.15)', color:'#a78bfa',       label:'Haulage Units',  onclick:"navigate('companies');setTimeout(()=>filterCompanies('haulage'),400)" },
+    { page:'companies', icon:'ti-car',              bg:'rgba(34,197,94,.15)',  color:'#4ade80',       label:'Pool Cars',      onclick:"navigate('companies');setTimeout(()=>filterCompanies('pool'),400)" },
+    { page:'feedback',  icon:'ti-star',             bg:'rgba(236,72,153,.15)', color:'#f472b6',       label:'Client Feedback' },
+    { page:'compliance',icon:'ti-shield-check',     bg:'rgba(239,68,68,.15)', color:'var(--red)',    label:'Compliance' },
+    { page:'vendors',   icon:'ti-building-store',   bg:'rgba(201,168,76,.15)', color:'var(--gold)',   label:'Vendors' },
+    { page:'imprest',   icon:'ti-wallet',           bg:'rgba(99,102,241,.15)', color:'#818cf8',       label:'Imprest' },
+    { page:'chat',      icon:'ti-message-circle',   bg:'rgba(79,142,247,.15)', color:'var(--accent)', label:'Team Chat' },
+  ].filter(a => allowed.includes(a.page));
+
+  // Deduplicate (companies appears twice for haulage + pool)
+  const actionCards = actions.map(a => {
+    const click = a.onclick || `navigate('${a.page}')`;
+    return `<button class="action-card" onclick="${click}">
+      <div class="action-icon" style="background:${a.bg};color:${a.color}"><i class="ti ${a.icon}"></i></div>
+      <div class="action-label">${a.label}</div>
+    </button>`;
+  }).join('');
 
   html('page-content', `
+    <div class="dash-greeting">
+      <span class="dash-hi">${greeting}, ${sanitise(firstName)}.</span>
+      <span class="dash-date">${new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</span>
+    </div>
+
     <div class="stat-grid">
-      ${allowed.includes('requests') ? `<div class="stat-card stat-amber">
-        <div class="stat-label">Pending</div>
-        <div class="stat-value">${dash.pending?.count||0}</div>
-        <div class="stat-sub">${fmt(dash.pending?.total||0)}</div>
+      ${allowed.includes('requests') ? `
+      <div class="stat-card stat-amber" onclick="navigate('requests')" style="cursor:pointer">
+        <div class="stat-label">Pending Payments</div>
+        <div class="stat-value">${dash.pending?.count || 0}</div>
+        <div class="stat-sub">${fmt(dash.pending?.total || 0)}</div>
       </div>` : ''}
-      ${allowed.includes('requests') ? `<div class="stat-card stat-green">
-        <div class="stat-label">Paid (30d)</div>
-        <div class="stat-value">${dash.paid_30d?.count||0}</div>
-        <div class="stat-sub">${fmt(dash.paid_30d?.total||0)}</div>
+      ${allowed.includes('requests') ? `
+      <div class="stat-card stat-green" onclick="navigate('requests')" style="cursor:pointer">
+        <div class="stat-label">Paid (30 days)</div>
+        <div class="stat-value">${dash.paid_30d?.count || 0}</div>
+        <div class="stat-sub">${fmt(dash.paid_30d?.total || 0)}</div>
       </div>` : ''}
-      ${allowed.includes('receivables') ? `<div class="stat-card stat-blue">
+      ${allowed.includes('receivables') ? `
+      <div class="stat-card stat-blue" onclick="navigate('receivables')" style="cursor:pointer">
         <div class="stat-label">Receivables</div>
-        <div class="stat-value">${dash.receivables?.count||0}</div>
-        <div class="stat-sub">${fmt(dash.receivables?.total||0)}</div>
+        <div class="stat-value">${dash.receivables?.count || 0}</div>
+        <div class="stat-sub">${fmt(dash.receivables?.total || 0)}</div>
       </div>` : ''}
-      ${allowed.includes('imprest') ? `<div class="stat-card stat-purple">
-        <div class="stat-label">Imprest</div>
-        <div class="stat-value">${fmt(dash.imprest_total||0)}</div>
+      ${allowed.includes('imprest') ? `
+      <div class="stat-card stat-purple" onclick="navigate('imprest')" style="cursor:pointer">
+        <div class="stat-label">Imprest Balance</div>
+        <div class="stat-value">${fmt(dash.imprest_total || 0)}</div>
         <div class="stat-sub">Available</div>
       </div>` : ''}
-      <div class="stat-card stat-blue">
+      <div class="stat-card stat-blue" onclick="navigate('vehicles')" style="cursor:pointer">
         <div class="stat-label">Fleet</div>
-        <div class="stat-value">${dash.fleet||0}</div>
+        <div class="stat-value">${dash.fleet || 0}</div>
         <div class="stat-sub">Vehicles</div>
       </div>
-      <div class="stat-card stat-green">
+      <div class="stat-card stat-green" onclick="navigate('drivers')" style="cursor:pointer">
         <div class="stat-label">Drivers</div>
-        <div class="stat-value">${dash.drivers||0}</div>
+        <div class="stat-value">${dash.drivers || 0}</div>
         <div class="stat-sub">Active</div>
       </div>
     </div>
 
-    ${overdueCount > 0 ? `
-    <div class="card" style="border-left:3px solid var(--red);margin-bottom:12px">
-      <div class="card-title blink"><i class="ti ti-alert-triangle" style="color:var(--red)"></i> ${overdueCount} Alert${overdueCount>1?'s':''} Need Attention</div>
-      ${(alerts.credit_due||[]).map(c=>`
-        <div class="list-item" style="margin-bottom:6px;padding:10px">
-          <div class="list-dot red"><i class="ti ti-clock"></i></div>
-          <div class="list-body">
-            <div class="list-title">${c.ref_number}</div>
-            <div class="list-sub">${fmt(c.amount_to_pay)} — Due ${fmtDate(c.credit_due_date)}</div>
-          </div>
-        </div>`).join('')}
-    </div>` : ''}
-
     <div class="section-header"><div class="section-title">Quick Actions</div></div>
-    <div class="action-grid">
-      ${allowed.includes('requests') ? `<button class="action-card" onclick="navigate('requests')">
-        <div class="action-icon" style="background:rgba(245,158,11,.15);color:var(--amber)"><i class="ti ti-file-plus"></i></div>
-        <div class="action-label">New Payment</div>
-      </button>` : ''}
-      ${allowed.includes('fuel') ? `<button class="action-card" onclick="navigate('fuel')">
-        <div class="action-icon" style="background:rgba(16,185,129,.15);color:var(--green)"><i class="ti ti-gas-station"></i></div>
-        <div class="action-label">Fuel Request</div>
-      </button>` : ''}
-      ${allowed.includes('trips') ? `<button class="action-card" onclick="navigate('trips')">
-        <div class="action-icon" style="background:rgba(79,142,247,.15);color:var(--accent)"><i class="ti ti-route"></i></div>
-        <div class="action-label">Trip Log</div>
-      </button>` : ''}
-      ${allowed.includes('companies') ? `<button class="action-card" onclick="navigate('companies');setTimeout(()=>filterCompanies('haulage'),400)">
-        <div class="action-icon" style="background:rgba(139,92,246,.15);color:#a78bfa"><i class="ti ti-truck"></i></div>
-        <div class="action-label">Haulage Units</div>
-      </button>` : ''}
-      ${allowed.includes('companies') ? `<button class="action-card" onclick="navigate('companies');setTimeout(()=>filterCompanies('pool'),400)">
-        <div class="action-icon" style="background:rgba(34,197,94,.15);color:#4ade80"><i class="ti ti-car"></i></div>
-        <div class="action-label">Pool Cars</div>
-      </button>` : ''}
-      ${allowed.includes('feedback') ? `<button class="action-card" onclick="navigate('feedback')">
-        <div class="action-icon" style="background:rgba(236,72,153,.15);color:#f472b6"><i class="ti ti-star"></i></div>
-        <div class="action-label">Client Feedback</div>
-      </button>` : ''}
-      ${allowed.includes('compliance') ? `<button class="action-card" onclick="navigate('compliance')">
-        <div class="action-icon" style="background:rgba(239,68,68,.15);color:var(--red)"><i class="ti ti-shield-check"></i></div>
-        <div class="action-label">Compliance</div>
-      </button>` : ''}
-      ${allowed.includes('vendors') ? `<button class="action-card" onclick="navigate('vendors')">
-        <div class="action-icon" style="background:rgba(201,168,76,.15);color:var(--gold)"><i class="ti ti-building-store"></i></div>
-        <div class="action-label">Vendors</div>
-      </button>` : ''}
-      ${allowed.includes('chat') ? `<button class="action-card" onclick="navigate('chat')">
-        <div class="action-icon" style="background:rgba(79,142,247,.15);color:var(--accent)"><i class="ti ti-message-circle"></i></div>
-        <div class="action-label">Team Chat</div>
-      </button>` : ''}
-
+    <div class="action-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:10px;margin-bottom:20px">
+      ${actionCards}
     </div>
 
     ${dash.pending_fuel > 0 ? `
-    <div class="card">
-      <div class="card-title"><i class="ti ti-gas-station" style="color:var(--amber)"></i> ${dash.pending_fuel} Fuel Request${dash.pending_fuel>1?'s':''} Pending</div>
-      <button class="btn btn-ghost btn-block btn-sm" onclick="navigate('fuel')">View All →</button>
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title"><i class="ti ti-gas-station" style="color:var(--amber)"></i>
+        ${dash.pending_fuel} fuel request${dash.pending_fuel > 1 ? 's' : ''} waiting for approval
+      </div>
+      <button class="btn btn-ghost btn-block btn-sm" onclick="navigate('fuel')">Review requests →</button>
     </div>` : ''}
 
-    ${['super_admin','admin'].includes(user.role) ? `
-    <div id="access-log-widget"></div>` : ''}
+    ${['super_admin','admin','real_admin'].includes(user.role) ? `<div id="access-log-widget"></div>` : ''}
     <div id="compliance-widget"></div>
   `);
 
-  // Load compliance alerts in background after render (it's slower)
+  // Load compliance alerts quietly in the background
   api('GET', '/api/compliance/alerts').then(liveAlerts => {
     const w = el('compliance-widget');
-    if (!w || (!liveAlerts.vehicles?.length && !liveAlerts.drivers?.length && !liveAlerts.credit_due?.length)) return;
-    const total = (liveAlerts.vehicles?.length||0) + (liveAlerts.drivers?.length||0) + (liveAlerts.credit_due?.length||0);
-    w.innerHTML = `<div class="card" style="border-left:3px solid var(--red);margin-bottom:12px">
-      <div class="card-title blink"><i class="ti ti-alert-triangle" style="color:var(--red)"></i> ${total} Compliance Alert${total>1?'s':''}</div>
-      ${(liveAlerts.credit_due||[]).slice(0,3).map(c=>`<div class="list-item" style="padding:10px;margin-bottom:4px">
-        <div class="list-dot red"><i class="ti ti-clock"></i></div>
-        <div class="list-body"><div class="list-title" style="font-size:13px">${c.ref_number}</div>
-        <div class="list-sub">${fmt(c.amount_to_pay)} due ${fmtDate(c.credit_due_date)}</div></div>
-      </div>`).join('')}
-      <button class="btn btn-ghost btn-block btn-sm" onclick="navigate('compliance')">View All Alerts →</button>
-    </div>`;
+    if (!w) return;
+    const total = (liveAlerts.vehicles?.length || 0) + (liveAlerts.drivers?.length || 0) + (liveAlerts.credit_due?.length || 0);
+    if (!total) return;
+    w.innerHTML = `
+      <div class="card" style="border-left:3px solid var(--red);margin-bottom:12px">
+        <div class="card-title blink">
+          <i class="ti ti-alert-triangle" style="color:var(--red)"></i>
+          ${total} compliance alert${total > 1 ? 's' : ''} need attention
+        </div>
+        ${(liveAlerts.credit_due || []).slice(0, 3).map(c => `
+          <div class="list-item" style="padding:10px;margin-bottom:4px">
+            <div class="list-dot red"><i class="ti ti-clock"></i></div>
+            <div class="list-body">
+              <div class="list-title" style="font-size:13px">${sanitise(c.ref_number)}</div>
+              <div class="list-sub">${fmt(c.amount_to_pay)} — due ${fmtDate(c.credit_due_date)}</div>
+            </div>
+          </div>`).join('')}
+        <button class="btn btn-ghost btn-block btn-sm" onclick="navigate('compliance')">See all alerts →</button>
+      </div>`;
   }).catch(() => {});
 
-  // Load access log for super admin
+  // Load today's access log for admins
   if (['real_admin','super_admin','admin'].includes(user.role)) {
     api('GET', '/api/access/log').then(logs => {
       const widget = el('access-log-widget');
       if (!widget || !logs?.length) return;
-      const newToday = logs.filter(l => {
-        const today = new Date().toISOString().slice(0,10);
-        return l.visited_at?.slice(0,10) === today;
-      });
+      const today = new Date().toISOString().slice(0, 10);
+      const todayLogs = logs.filter(l => l.visited_at?.slice(0, 10) === today);
+      if (!todayLogs.length) return;
       widget.innerHTML = `
-        <div class="card" style="border-left:3px solid var(--accent)">
-          <div class="card-title"><i class="ti ti-shield-check" style="color:var(--accent)"></i> Access Log — Today (${newToday.length} visits)</div>
-          ${newToday.slice(0,5).map(l => `
+        <div class="card" style="border-left:3px solid var(--accent);margin-bottom:10px">
+          <div class="card-title">
+            <i class="ti ti-shield-check" style="color:var(--accent)"></i>
+            Access Log — ${todayLogs.length} visit${todayLogs.length > 1 ? 's' : ''} today
+          </div>
+          ${todayLogs.slice(0, 5).map(l => `
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
               <div>
-                <div style="font-weight:600;color:var(--text)">${l.full_name||'Unknown'}</div>
-                <div style="color:var(--text3)">${l.phone||'—'} · ${l.visit_type==='new'?'<span style="color:var(--amber)">New visitor</span>':'Returning'}</div>
+                <div style="font-weight:600;color:var(--text)">${sanitise(l.full_name || 'Unknown')}</div>
+                <div style="color:var(--text3)">${sanitise(l.phone || '—')} · ${l.visit_type === 'new' ? '<span style="color:var(--amber)">New visitor</span>' : 'Returning'}</div>
               </div>
-              <div style="text-align:right;color:var(--text3);font-size:11px">${l.visited_at?new Date(l.visited_at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):''}</div>
+              <div style="text-align:right;color:var(--text3);font-size:11px">
+                ${l.visited_at ? new Date(l.visited_at).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'}) : ''}
+              </div>
             </div>`).join('')}
-          <button class="btn btn-ghost btn-block btn-sm" style="margin-top:10px" onclick="showFullAccessLog()">View Full Log →</button>
+          <button class="btn btn-ghost btn-block btn-sm" style="margin-top:10px" onclick="showFullAccessLog()">Full log →</button>
         </div>`;
-    }).catch(()=>{});
+    }).catch(() => {});
   }
 }
 
@@ -7518,78 +7572,87 @@ async function runSeed() {
 
 // ── COMPANIES / UNITS ─────────────────────────────────────────────────────────
 async function pgCompanies() {
-  html('topbar-btn', `<button class="topbar-action" onclick="showNewCompany()"><i class="ti ti-plus"></i></button>`);
+  const isAdmin = ['super_admin','real_admin','admin'].includes(user.role);
+  html('topbar-btn', `
+    <div style="display:flex;gap:8px;align-items:center">
+      ${isAdmin ? `<button class="topbar-action" title="Add company" onclick="showNewCompany()"><i class="ti ti-plus"></i></button>` : ''}
+      <button class="topbar-action" title="Import companies" onclick="showImportCompanies()"><i class="ti ti-upload"></i></button>
+    </div>
+  `);
+
   const [companies, vehicles, drivers] = await Promise.all([
-    api('GET','/api/companies'),
-    api('GET','/api/vehicles').catch(()=>[]),
-    api('GET','/api/drivers').catch(()=>[]),
+    api('GET', '/api/companies'),
+    api('GET', '/api/vehicles').catch(() => []),
+    api('GET', '/api/drivers').catch(() => []),
   ]);
-  window._co = {vehicles, drivers};
+  window._co = { vehicles, drivers };
+
+  const haulageCount = companies.filter(c => c.type === 'haulage').length;
+  const poolCount    = companies.filter(c => c.type === 'pool').length;
 
   html('page-content', `
-    <div style="display:flex;gap:6px;margin-bottom:12px;overflow-x:auto">
-      <button class="group-chip active" onclick="filterCompanies('all')" data-ct="all">All</button>
-      <button class="group-chip" onclick="filterCompanies('haulage')" data-ct="haulage">🚛 Haulage</button>
-      <button class="group-chip" onclick="filterCompanies('pool')" data-ct="pool">🚗 Pool Cars</button>
+    <!-- Category tabs -->
+    <div style="display:flex;gap:6px;margin-bottom:16px;overflow-x:auto;padding-bottom:2px">
+      <button class="group-chip active" onclick="filterCompanies('all')" data-ct="all">
+        All <span class="chip-count">${companies.length}</span>
+      </button>
+      <button class="group-chip" onclick="filterCompanies('haulage')" data-ct="haulage">
+        🚛 Haulage <span class="chip-count">${haulageCount}</span>
+      </button>
+      <button class="group-chip" onclick="filterCompanies('pool')" data-ct="pool">
+        🚗 Pool Cars <span class="chip-count">${poolCount}</span>
+      </button>
     </div>
-    ${companies.map(c => `
-      <div class="card" data-ctype="${c.type}">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div>
-            <div style="font-size:15px;font-weight:700">${c.name}</div>
-            <div style="font-size:12px;color:var(--text3)">${c.type==='haulage'?'🚛 Haulage Unit':'🚗 Pool Cars Unit'} · ${c.vehicle_count||0} vehicles · ${c.driver_count||0} drivers</div>
+
+    <!-- Company cards -->
+    <div id="companies-list">
+      ${companies.length ? companies.map(c => {
+        const vCount  = c.vehicle_count || 0;
+        const dCount  = c.driver_count  || 0;
+        const typeLabel = c.type === 'haulage' ? '🚛 Haulage Unit' : '🚗 Pool Cars';
+        const price   = parseFloat(c.diesel_price_per_litre || 990);
+        return `
+        <div class="card company-card" data-ctype="${sanitise(c.type)}" style="margin-bottom:10px">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px">
+            <div>
+              <div style="font-size:15px;font-weight:700;color:var(--text)">${sanitise(c.name)}</div>
+              <div style="font-size:12px;color:var(--text3);margin-top:2px">
+                ${typeLabel} &nbsp;·&nbsp; ${vCount} vehicle${vCount !== 1 ? 's' : ''} &nbsp;·&nbsp; ${dCount} driver${dCount !== 1 ? 's' : ''}
+              </div>
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-size:11px;color:var(--text3)">Fuel price</div>
+              <div style="font-size:16px;font-weight:800;color:var(--amber)">₦${price.toLocaleString()}/L</div>
+              ${isAdmin ? `<button class="btn btn-ghost btn-sm" style="margin-top:4px;font-size:11px" onclick="updateDieselPrice(${c.id},'${sanitise(c.name)}',${price})">
+                <i class="ti ti-pencil"></i> Update
+              </button>` : ''}
+            </div>
           </div>
-          <div style="text-align:right">
-            <div style="font-size:11px;color:var(--text3)">Diesel Price</div>
-            <div style="font-size:16px;font-weight:800;color:var(--amber)">₦${parseFloat(c.diesel_price_per_litre||990).toLocaleString()}/L</div>
-            <button class="btn btn-ghost btn-sm" style="margin-top:4px;font-size:11px" onclick="updateDieselPrice(${c.id},'${c.name}',${c.diesel_price_per_litre||990})">
-              <i class="ti ti-pencil"></i> Update Price
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm" onclick="manageCompanyVehicles(${c.id},'${sanitise(c.name)}')">
+              <i class="ti ti-truck"></i> Vehicles (${vCount})
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="manageCompanyDrivers(${c.id},'${sanitise(c.name)}')">
+              <i class="ti ti-id-badge"></i> Drivers (${dCount})
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="navigate('trips');window._filterCompany=${c.id}">
+              <i class="ti ti-map-route"></i> Trip Log
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="showFixedCosts(${c.id},'${sanitise(c.name)}')">
+              <i class="ti ti-calculator"></i> Fixed Costs
             </button>
           </div>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-primary btn-sm" onclick="manageCompanyVehicles(${c.id},'${c.name}')">
-            <i class="ti ti-truck"></i> Vehicles (${c.vehicle_count||0})
-          </button>
-          <button class="btn btn-ghost btn-sm" onclick="manageCompanyDrivers(${c.id},'${c.name}')">
-            <i class="ti ti-id-badge"></i> Drivers (${c.driver_count||0})
-          </button>
-          <button class="btn btn-ghost btn-sm" onclick="navigate('trips');window._filterCompany=${c.id}">
-            <i class="ti ti-map-route"></i> Trip Log
-          </button>
-          <button class="btn btn-ghost btn-sm" onclick="showFixedCosts(${c.id},'${c.name}')">
-            <i class="ti ti-calculator"></i> Fixed Costs
-          </button>
-        </div>
-      </div>`).join('') || '<div class="empty-state"><div class="empty-icon"><i class="ti ti-building-factory"></i></div><div class="empty-title">No companies yet</div><div class="empty-sub">Create your first company unit</div></div>'}
+        </div>`;
+      }).join('') : `
+        <div class="empty-state">
+          <div class="empty-icon"><i class="ti ti-building-factory"></i></div>
+          <div class="empty-title">No companies yet</div>
+          <div class="empty-sub">Create your first company unit to get started</div>
+        </div>`}
+    </div>
   `);
 }
 
-function filterCompanies(type) {
-  document.querySelectorAll('[data-ct]').forEach(b => b.classList.toggle('active', b.dataset.ct===type));
-  document.querySelectorAll('[data-ctype]').forEach(el => {
-    el.style.display = (type==='all' || el.dataset.ctype===type) ? '' : 'none';
-  });
-}
-
-function showNewCompany() {
-  showModal('Create Company / Unit', `
-    <div class="form-group"><label class="form-label">Company / Unit Name</label>
-      <input class="form-input" id="nc-name" placeholder="e.g. International Breweries, NBC Staff Bus"></div>
-    <div class="form-group"><label class="form-label">Unit Type</label>
-      <select class="form-input" id="nc-type">
-        <option value="haulage">🚛 Haulage Unit (Diesel vehicles, long-haul trucks)</option>
-        <option value="pool">🚗 Pool Cars Unit (Petrol vehicles, staff buses, hire cars)</option>
-      </select></div>
-
-    <div style="background:var(--bg3);border-radius:10px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--text3)">
-      After creating, you can assign specific vehicles and drivers to this unit from the company detail view.
-    </div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-primary btn-block" onclick="submitNewCompany()">Create Unit</button>
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-    </div>`);
-}
 
 async function submitNewCompany() {
   try {
