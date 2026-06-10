@@ -753,12 +753,15 @@ textarea.form-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 /* ── ACTION GRID (Dashboard Quick Actions) ─────────────────────── */
 .action-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   gap: 10px;
   margin-bottom: 20px;
 }
-@media (max-width:600px) {
+@media (max-width: 700px) {
   .action-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 400px) {
+  .action-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* ── MULTI-CUSTOMER DELIVERY BLOCK ─────────────────────────────── */
@@ -1091,21 +1094,23 @@ const ALL_PAGES = [
   { id:'departments',  icon:'ti-building-community',label:'Departments',  section:'Admin' },
   { id:'audit',        icon:'ti-history',         label:'Audit Log',      section:'Admin' },
   { id:'history',      icon:'ti-table-export',    label:'History & Export',section:'Admin' },
+  { id:'budget',       icon:'ti-report-money',    label:'Budget & Planning',section:'Finance' },
+  { id:'vendor-portal',icon:'ti-building-store',  label:'Vendor Portal',  section:'Admin' },
 ];
 
 const ROLE_PAGES = {
   real_admin:         ALL_PAGES.map(p => p.id),
   super_admin:        ALL_PAGES.map(p => p.id),
   admin:              ALL_PAGES.map(p => p.id),
-  hr:                 ['dashboard','issues','drivers','vehicles','compliance','reservations','chat','meetings'],
-  accounts:           ['dashboard','issues','requests','receivables','imprest','clients','fuel','chat','audit','balance','meetings','vendors','debit'],
-  compliance:         ['dashboard','issues','vehicles','drivers','compliance','chat','maintenance'],
-  operations_manager: ['dashboard','issues','requests','fuel','vehicles','drivers','reservations','inventory','compliance','maintenance','chat','companies','trips','availability','meetings','vendors','debit'],
+  hr:                 ['dashboard','issues','drivers','vehicles','compliance','reservations','chat','meetings','budget'],
+  accounts:           ['dashboard','issues','requests','receivables','imprest','clients','fuel','chat','audit','balance','meetings','vendors','debit','budget'],
+  compliance:         ['dashboard','issues','vehicles','drivers','compliance','chat','maintenance','budget'],
+  operations_manager: ['dashboard','issues','requests','fuel','vehicles','drivers','reservations','inventory','compliance','maintenance','chat','companies','trips','availability','meetings','vendors','debit','budget'],
   haulage_manager:    ['dashboard','issues','requests','fuel','vehicles','drivers','compliance','companies','trips','inventory','chat','availability','maintenance','meetings','vendors','debit'],
   pool_manager:       ['dashboard','issues','requests','fuel','vehicles','drivers','reservations','compliance','companies','chat','availability','meetings'],
   logistics_supervisor:['dashboard','issues','availability','chat'],
   driver:             ['dashboard','issues','fuel','reservations','chat'],
-  staff:              ['dashboard','issues','requests','fuel','chat'],
+  staff:              ['dashboard','issues','requests','fuel','chat','budget'],
 };
 
 function allowedPages() {
@@ -1400,6 +1405,7 @@ async function pgDashboard() {
     { page:'vendors',   icon:'ti-building-store',   bg:'rgba(201,168,76,.15)', color:'var(--gold)',   label:'Vendors' },
     { page:'imprest',   icon:'ti-wallet',           bg:'rgba(99,102,241,.15)', color:'#818cf8',       label:'Imprest' },
     { page:'chat',      icon:'ti-message-circle',   bg:'rgba(79,142,247,.15)', color:'var(--accent)', label:'Team Chat' },
+    { page:'budget',    icon:'ti-report-money',     bg:'rgba(16,185,129,.15)', color:'var(--green)',  label:'Budget' },
   ].filter(a => allowed.includes(a.page));
 
   // Deduplicate (companies appears twice for haulage + pool)
@@ -1455,7 +1461,7 @@ async function pgDashboard() {
     </div>
 
     <div class="section-header"><div class="section-title">Quick Actions</div></div>
-    <div class="action-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:10px;margin-bottom:20px">
+    <div class="action-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">
       ${actionCards}
     </div>
 
@@ -3621,58 +3627,99 @@ async function submitFuelV2() {
   } catch(e) { alert(e.message||'Submit failed'); }
 }
 async function submitNewTrip() {
-  const payload = {
-    company_id: el('nt-co')?.value,
-    trip_date: el('nt-date')?.value,
-    waybill_number: el('nt-waybill')?.value,
-    invoice_number: el('nt-invoice')?.value,
-    vehicle_id: el('nt-veh')?.value,
-    driver_id: el('nt-drv')?.value,
-    loading_site: el('nt-load')?.value,
-    offloading_site: el('nt-offload')?.value,
-    to_km: el('nt-km')?.value,
-    standard_transit_hrs: el('nt-transit')?.value,
-    customer_name: el('nt-cust')?.value,
-    customer_phone: el('nt-phone')?.value,
-    shipment_number: el('nt-ship')?.value,
-    load_description: el('nt-load-desc')?.value,
-    plant_arrival: el('nt-plant-arr')?.value,
-    plant_departure: el('nt-plant-dep')?.value,
-    depot_arrival: el('nt-depot-arr')?.value,
-    depot_departure: el('nt-depot-dep')?.value,
-    return_plant_arrival: el('nt-return-arr')?.value,
-    rate: el('nt-rate')?.value,
-    pallet_size: el('nt-pallet')?.value,
-    outward_value: el('nt-outval')?.value,
-    return_value: el('nt-retval')?.value,
-    total_diesel: el('nt-diesel')?.value,
-    bit_allowance: el('nt-bit')?.value,
-    area: el('nt-area')?.value,
-    availability_code: el('nt-avail')?.value,
-    notes: el('nt-notes')?.value,
-  };
-  // Multi-customer mode
+  // ── Guard: loading waybill is required ──
+  const wbDoc1 = el('nt-wb-1')?.files?.[0];
+  if (!wbDoc1) {
+    showToast('Please attach the loading waybill (Document 1 is required)', 'error');
+    el('nt-wb-1')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+
+  // ── Guard: vehicle lock (open unclosed trip) ──
+  const lockDiv = el('nt-vehicle-lock');
+  if (lockDiv && lockDiv.style.display !== 'none') {
+    showToast('Close out the previous trip for this truck before logging a new one', 'error');
+    return;
+  }
+
+  // ── Convert loading waybill docs to base64 ──
+  const loadingDocs = [];
+  for (let i = 1; i <= 4; i++) {
+    const f = el(`nt-wb-${i}`)?.files?.[0];
+    if (f) {
+      if (f.size > 10 * 1024 * 1024) { showToast(`Document ${i} exceeds 10 MB`, 'error'); return; }
+      const b64 = await fileToBase64(f);
+      loadingDocs.push({ name: f.name, type: f.type, data: b64 });
+    }
+  }
+
   const isMulti = el('nt-multi-toggle')?.checked;
+  const payload = {
+    company_id:          el('nt-co')?.value,
+    trip_date:           el('nt-date')?.value,
+    waybill_number:      el('nt-waybill')?.value?.trim(),
+    invoice_number:      el('nt-invoice')?.value?.trim(),
+    vehicle_id:          el('nt-veh')?.value,
+    driver_id:           el('nt-drv')?.value,
+    loading_site:        el('nt-load')?.value?.trim(),
+    offloading_site:     el('nt-offload')?.value?.trim(),
+    to_km:               el('nt-km')?.value,
+    standard_transit_hrs:el('nt-transit')?.value,
+    shipment_number:     el('nt-ship')?.value?.trim(),
+    load_description:    el('nt-load-desc')?.value?.trim(),
+    plant_arrival:       el('nt-plant-arr')?.value || null,
+    plant_departure:     el('nt-plant-dep')?.value || null,
+    depot_arrival:       el('nt-depot-arr')?.value || null,
+    depot_departure:     el('nt-depot-dep')?.value || null,
+    return_plant_arrival:el('nt-return-arr')?.value || null,
+    rate:                el('nt-rate')?.value,
+    pallet_size:         el('nt-pallet')?.value,
+    outward_value:       el('nt-outval')?.value,
+    return_value:        el('nt-retval')?.value,
+    total_diesel:        el('nt-diesel')?.value,
+    bit_allowance:       el('nt-bit')?.value,
+    area:                el('nt-area')?.value?.trim(),
+    availability_code:   el('nt-avail')?.value,
+    notes:               el('nt-notes')?.value?.trim(),
+    loading_waybill_docs:JSON.stringify(loadingDocs),
+    trip_status:         'loading',
+    logged_by:           user?.full_name || user?.name || '',
+  };
+
+  // Multi-customer validation
   if (isMulti) {
     const { customers, valid } = collectMultiCustomers();
-    if (!valid) { alert('All delivery point fields (Name, Phone, Address, Load) are compulsory.'); return; }
+    if (!valid) { showToast('All delivery point fields (Name, Phone, Address, Load) are compulsory', 'error'); return; }
     payload.is_multi_customer = true;
-    payload.multi_customers = JSON.stringify(customers);
-    payload.customer_name = customers.map(c=>c.name).join(', ');
-    payload.customer_phone = customers.map(c=>c.phone).join(', ');
+    payload.multi_customers   = JSON.stringify(customers);
+    payload.customer_name     = customers.map(c => c.name).join(', ');
+    payload.customer_phone    = customers.map(c => c.phone).join(', ');
   } else {
-    payload.delivery_address = el('nt-cust-addr')?.value;
+    payload.customer_name  = el('nt-cust')?.value?.trim();
+    payload.customer_phone = el('nt-phone')?.value?.trim();
+    payload.delivery_address = el('nt-cust-addr')?.value?.trim();
   }
-  if (!payload.waybill_number) { alert('Waybill number is required'); return; }
-  if (!isMulti && !payload.customer_name) { alert('Customer name is required'); return; }
+
+  // Required field checks
+  if (!payload.waybill_number) { showToast('Waybill number is required', 'error'); el('nt-waybill')?.focus(); return; }
+  if (!isMulti && !payload.customer_name) { showToast('Customer name is required', 'error'); el('nt-cust')?.focus(); return; }
+  if (!payload.vehicle_id) { showToast('Please select a vehicle', 'error'); return; }
+
+  const btn = el('nt-submit-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Saving…'; }
+
   try {
     clearCache();
     await api('POST', '/api/trips', payload);
     closeModal();
-    showToast('Trip logged successfully','success');
+    showToast('Trip logged — truck is now on the road 🚛', 'success');
     navigate('trips');
-  } catch(e) { alert(e.message||'Failed to save trip'); }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save Trip'; }
+    showToast(e.message || 'Failed to save trip', 'error');
+  }
 }
+
 
 function calcKmFuel() {
   const prev = parseFloat(el('nf-odo-prev')?.value || 0);
@@ -5381,170 +5428,236 @@ async function confirmReceipt(id) {
 
 // ── IMPREST (Enhanced — person/unit, retirement workflow, accounts approval) ──
 async function pgImprest() {
+  const isAdmin    = ['real_admin','super_admin','admin'].includes(user.role);
   const isAccounts = ['real_admin','super_admin','admin','accounts'].includes(user.role);
+
   html('topbar-btn', `
     <div style="display:flex;gap:6px">
-      ${isAccounts ? `<button class="btn btn-ghost btn-sm" onclick="showImprestStats()" style="font-size:11px"><i class="ti ti-chart-bar"></i></button>` : ''}
+      ${isAccounts ? `<button class="btn btn-ghost btn-sm" onclick="showImprestStats()"><i class="ti ti-chart-bar"></i></button>` : ''}
       <button class="topbar-action" onclick="showNewImprest()"><i class="ti ti-plus"></i></button>
     </div>`);
 
-  const [accounts, retirements] = await Promise.all([
+  const [accounts, retirements, vendors] = await Promise.all([
     api('GET', '/api/imprest'),
     api('GET', '/api/imprest/retirements').catch(() => []),
+    api('GET', '/api/vendors').catch(() => []),
   ]);
 
-  const total = accounts.reduce((s,i) => s+(+i.balance||0), 0);
+  const petrolVendors = vendors.filter(v =>
+    (v.vendor_type || v.type || '').toLowerCase().includes('petrol') ||
+    (v.products_services || '').toLowerCase().includes('fuel') ||
+    (v.products_services || '').toLowerCase().includes('diesel') ||
+    (v.products_services || '').toLowerCase().includes('petrol')
+  );
+
+  const total        = accounts.reduce((s, i) => s + (+i.balance || 0), 0);
   const pendingRetire = retirements.filter(r => r.status === 'pending').length;
-  const isAdmin = ['real_admin','super_admin','admin'].includes(user.role);
 
   html('page-content', `
-    <!-- Summary Banner -->
+    <!-- ── Summary banner ── -->
     <div style="background:linear-gradient(135deg,rgba(201,168,76,.12),rgba(124,58,237,.08));border:1px solid rgba(201,168,76,.2);border-radius:var(--r-md);padding:18px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
       <div>
-        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--t3);font-family:'DM Mono',monospace">Total Imprest Float</div>
-        <div style="font-size:32px;font-weight:900;color:var(--t1);font-family:'Fraunces',serif;line-height:1.1">${fmt(total)}</div>
-        <div style="font-size:12px;color:var(--t3);margin-top:2px">Across ${accounts.length} account${accounts.length!==1?'s':''}</div>
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--t3)">Total Imprest Float</div>
+        <div style="font-size:32px;font-weight:900;color:var(--t1);line-height:1.1">${fmt(total)}</div>
+        <div style="font-size:12px;color:var(--t3);margin-top:2px">Across ${accounts.length} account${accounts.length !== 1 ? 's' : ''}</div>
       </div>
       ${pendingRetire > 0 ? `
       <div style="background:rgba(217,119,6,.1);border:1px solid rgba(217,119,6,.25);border-radius:var(--r-sm);padding:10px 14px;text-align:center">
-        <div style="font-size:10px;color:var(--amber);font-weight:700;text-transform:uppercase">Pending Retirement</div>
-        <div style="font-size:24px;font-weight:900;color:var(--amber);font-family:'Fraunces',serif">${pendingRetire}</div>
-        <div style="font-size:11px;color:var(--amber)">awaiting approval</div>
+        <div style="font-size:10px;color:var(--amber);font-weight:700;text-transform:uppercase">Awaiting Retirement</div>
+        <div style="font-size:24px;font-weight:900;color:var(--amber)">${pendingRetire}</div>
+        <div style="font-size:10px;color:var(--amber)">request${pendingRetire > 1 ? 's' : ''}</div>
       </div>` : ''}
     </div>
 
-    <!-- Tab bar -->
-    <div style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--b2);padding-bottom:10px">
-      <button class="history-tab active" id="imp-tab-accounts" onclick="impTab('accounts')">Accounts</button>
-      ${isAccounts ? `<button class="history-tab" id="imp-tab-retire" onclick="impTab('retire')">Retirement Requests ${pendingRetire>0?`<span style="background:var(--amber);color:var(--ink);font-size:9px;font-weight:800;padding:1px 5px;border-radius:10px;margin-left:4px">${pendingRetire}</span>`:''}
-      </button>` : ''}
+    <!-- ── Tabs ── -->
+    <div style="display:flex;gap:6px;margin-bottom:14px">
+      <button class="group-chip active" data-itab="accounts" onclick="switchImprestTab('accounts')">Accounts</button>
+      <button class="group-chip" data-itab="retirements" onclick="switchImprestTab('retirements')">Retirement Requests</button>
     </div>
 
-    <!-- Accounts List -->
-    <div id="imp-panel-accounts">
-      ${accounts.length ? accounts.map(a => {
-        const utilPct = a.original_balance > 0 ? Math.round((1 - a.balance/a.original_balance)*100) : 0;
-        const utilColor = utilPct > 85 ? 'var(--crimson)' : utilPct > 60 ? 'var(--amber)' : 'var(--emerald)';
+    <!-- ── Accounts tab ── -->
+    <div id="itab-accounts">
+      ${accounts.length ? accounts.map(acc => {
+        const bal = +acc.balance || 0;
+        const balColor = bal <= 0 ? 'var(--red)' : bal < 50000 ? 'var(--amber)' : 'var(--green)';
+        const linked = acc.linked_vendor_id
+          ? vendors.find(v => v.id == acc.linked_vendor_id)
+          : null;
+        const isFuelFloat = acc.account_type === 'fuel_float' || linked;
         return `
-        <div class="list-item" style="flex-direction:column;align-items:stretch;gap:12px">
-          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
-            <div style="flex:1">
-              <div style="font-size:14px;font-weight:700;color:var(--t1)">${sanitise(a.name)}</div>
-              <div style="font-size:11.5px;color:var(--t3);margin-top:2px">
-                ${sanitise(a.holder_type==='person'?'👤 '+a.holder_name:'🏢 '+a.holder_name)||''} 
-                ${a.bank_name?'· '+sanitise(a.bank_name):''}
-                ${a.sub_name?'· '+sanitise(a.sub_name):''}
+        <div class="card" style="margin-bottom:10px" id="imp-card-${acc.id}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+            <div>
+              <div style="font-size:15px;font-weight:700;color:var(--text)">${sanitise(acc.label || acc.name)}</div>
+              <div style="font-size:12px;color:var(--text3);margin-top:2px">
+                ${sanitise(acc.holder_name || acc.holder || 'null')} · ${sanitise(acc.bank_name || acc.bank || 'Cash')}
               </div>
-              <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap">
-                <span class="badge ${a.status==='active'?'badge-approved':'badge-pending'}">${a.status||'active'}</span>
-                <span class="badge badge-gold" style="font-size:9px">${a.holder_type==='unit'?'Unit Float':'Personal'}</span>
+              <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+                <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:rgba(34,197,94,.15);color:#4ade80">${acc.status ? acc.status.toUpperCase() : 'ACTIVE'}</span>
+                <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:rgba(99,102,241,.15);color:#818cf8">${isFuelFloat ? 'FUEL FLOAT' : (acc.category ? acc.category.toUpperCase() : 'PERSONAL')}</span>
+                ${linked ? `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:rgba(201,168,76,.15);color:var(--gold)">⛽ Linked: ${sanitise(linked.company_name || linked.name)}</span>` : ''}
               </div>
             </div>
             <div style="text-align:right;flex-shrink:0">
-              <div style="font-size:22px;font-weight:900;color:${+a.balance<10000?'var(--crimson)':+a.balance<50000?'var(--amber)':'var(--emerald)'};font-family:'Fraunces',serif">${fmt(a.balance)}</div>
-              <div style="font-size:10px;color:var(--t3)">available</div>
+              <div style="font-size:11px;color:var(--text3)">Balance</div>
+              <div style="font-size:22px;font-weight:900;color:${balColor}">${fmt(bal)}</div>
+              <div style="font-size:10px;color:var(--text3)">available</div>
             </div>
           </div>
-          ${a.original_balance > 0 ? `
-          <div>
-            <div style="height:5px;background:var(--ink4);border-radius:3px;overflow:hidden">
-              <div style="height:5px;border-radius:3px;background:${utilColor};width:${utilPct}%;transition:.4s"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:var(--t3)">
-              <span>${utilPct}% utilised</span><span>Original: ${fmt(a.original_balance)}</span>
+
+          <!-- Fuel float: show issuance summary if linked vendor -->
+          ${linked ? `
+          <div style="margin:10px 0 8px;padding:10px;background:rgba(201,168,76,.06);border-radius:8px;border:1px solid rgba(201,168,76,.15)">
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px">
+              <span style="color:var(--text3)">Fuel rate: <strong style="color:var(--gold)">₦${parseFloat(linked.price_per_litre || linked.diesel_price || 0).toLocaleString()}/L</strong></span>
+              <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="showImprestIssuanceLog(${acc.id},'${sanitise(linked.company_name || linked.name)}')">
+                <i class="ti ti-list"></i> Issuance Log
+              </button>
             </div>
           </div>` : ''}
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            ${isAccounts ? `<button class="btn btn-primary btn-sm" onclick="showFundImprest(${a.id},'${sanitise(a.name)}')"><i class="ti ti-plus"></i> Fund</button>` : ''}
-            <button class="btn btn-ghost btn-sm" onclick="showRetireImprest(${a.id},'${sanitise(a.name)}',${a.balance})"><i class="ti ti-file-invoice"></i> Retire</button>
-            <button class="btn btn-ghost btn-sm" onclick="showImprestHistory(${a.id},'${sanitise(a.name)}')"><i class="ti ti-history"></i> History</button>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            ${isAccounts ? `<button class="btn btn-primary btn-sm" onclick="showFundImprest(${acc.id},'${sanitise(acc.label||acc.name)}')">
+              <i class="ti ti-plus"></i> Fund
+            </button>` : ''}
+            <button class="btn btn-ghost btn-sm" onclick="showRetireImprest(${acc.id},'${sanitise(acc.label||acc.name)}',${bal})">
+              <i class="ti ti-file-invoice"></i> Retire
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="showImprestHistory(${acc.id},'${sanitise(acc.label||acc.name)}')">
+              <i class="ti ti-clock"></i> History
+            </button>
+            ${isAdmin ? `
+            <button class="btn btn-ghost btn-sm" onclick="showLinkImprestVendor(${acc.id},'${sanitise(acc.label||acc.name)}','${acc.linked_vendor_id || ''}')">
+              <i class="ti ti-link"></i> ${acc.linked_vendor_id ? 'Re-link Vendor' : 'Link Vendor'}
+            </button>` : ''}
           </div>
         </div>`;
-      }).join('') : '<div class="empty-state"><div class="empty-icon"><i class="ti ti-wallet"></i></div><div class="empty-title">No imprest accounts</div><div class="empty-sub">Create accounts for staff or units</div></div>'}
+      }).join('') : '<div class="empty-state"><div class="empty-icon"><i class="ti ti-wallet"></i></div><div class="empty-title">No imprest accounts yet</div><div class="empty-sub">Create one to get started</div></div>'}
     </div>
 
-    <!-- Retirement Requests Panel (accounts/admin only) -->
-    ${isAccounts ? `
-    <div id="imp-panel-retire" style="display:none">
+    <!-- ── Retirements tab (hidden by default) ── -->
+    <div id="itab-retirements" style="display:none">
       ${retirements.length ? retirements.map(r => `
-        <div class="list-item" style="flex-direction:column;align-items:stretch;gap:10px;border-left:3px solid ${r.status==='pending'?'var(--amber)':r.status==='approved'?'var(--emerald)':'var(--crimson)'}">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
+        <div class="card" style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
             <div>
-              <div style="font-size:13.5px;font-weight:700">${sanitise(r.account_name||'—')}</div>
-              <div style="font-size:11.5px;color:var(--t3)">${sanitise(r.holder_name||'—')} · ${fmtDate(r.created_at)}</div>
-              <div style="font-size:12px;color:var(--t2);margin-top:4px">${sanitise(r.purpose||'')}</div>
+              <div style="font-weight:700;font-size:14px">${sanitise(r.ref_number || '#'+r.id)}</div>
+              <div style="font-size:12px;color:var(--text3)">${sanitise(r.requester_name || '—')} · ${fmtDate(r.created_at)}</div>
+              <div style="font-size:12px;margin-top:4px">${sanitise(r.purpose || '')}</div>
             </div>
             <div style="text-align:right">
-              <div style="font-size:18px;font-weight:800;font-family:'Fraunces',serif;color:var(--t1)">${fmt(r.amount_retired)}</div>
-              <span class="badge badge-${r.status==='approved'?'approved':r.status==='pending'?'pending':'declined'}">${r.status}</span>
+              <div style="font-size:18px;font-weight:800;color:var(--amber)">${fmt(r.amount)}</div>
+              <span class="badge ${r.status === 'approved' ? 'badge-green' : r.status === 'declined' ? 'badge-red' : 'badge-amber'}">${r.status || 'pending'}</span>
             </div>
           </div>
-          ${r.expenses_breakdown ? `
-          <div style="background:var(--ink3);border-radius:var(--r-sm);padding:10px;font-size:12px">
-            ${JSON.parse(r.expenses_breakdown||'[]').map(e=>`
-              <div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--b3);color:var(--t2)">
-                <span>${sanitise(e.desc)}</span><strong style="color:var(--t1)">${fmt(e.amount)}</strong>
-              </div>`).join('')}
+          ${isAdmin && r.status === 'pending' ? `
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn btn-primary btn-sm" onclick="approveRetirement(${r.id})"><i class="ti ti-check"></i> Approve</button>
+            <button class="btn btn-ghost btn-sm" onclick="declineRetirement(${r.id})"><i class="ti ti-x"></i> Decline</button>
           </div>` : ''}
-          ${r.status === 'pending' && isAccounts ? `
-          <div style="display:flex;gap:6px">
-            <button class="btn btn-primary btn-sm" onclick="approveRetirement(${r.id})"><i class="ti ti-check"></i> Approve Reimbursement</button>
-            <button class="btn btn-danger btn-sm" onclick="declineRetirement(${r.id})"><i class="ti ti-x"></i> Decline</button>
-            <button class="btn btn-ghost btn-sm" onclick="viewRetirementDocs(${r.id},'${sanitise(r.account_name||'')}')"><i class="ti ti-paperclip"></i> Docs</button>
-          </div>` : r.status !== 'pending' ? `
-          <div style="font-size:11px;color:var(--t3)">${r.status==='approved'?`✅ Approved by ${sanitise(r.approved_by_name||'Accounts')} on ${fmtDate(r.approved_at)}`:`❌ Declined: ${sanitise(r.decline_reason||'')}`}</div>` : ''}
-        </div>`).join('') : '<div class="empty-state" style="padding:40px"><div class="empty-icon"><i class="ti ti-file-invoice"></i></div><div class="empty-title">No retirement requests</div></div>'}
-    </div>` : ''}
+        </div>`).join('') : '<div class="empty-state"><div class="empty-icon"><i class="ti ti-file-invoice"></i></div><div class="empty-title">No retirements yet</div></div>'}
+    </div>
   `);
 }
 
-function impTab(tab) {
-  ['accounts','retire'].forEach(t => {
-    const btn = el(`imp-tab-${t}`);
-    const panel = el(`imp-panel-${t}`);
-    if (btn) btn.classList.toggle('active', t === tab);
-    if (panel) panel.style.display = t === tab ? '' : 'none';
+function switchImprestTab(tab) {
+  document.querySelectorAll('[data-itab]').forEach(b => b.classList.toggle('active', b.dataset.itab === tab));
+  ['accounts','retirements'].forEach(t => {
+    const el_ = document.getElementById('itab-' + t);
+    if (el_) el_.style.display = t === tab ? '' : 'none';
   });
 }
 
-function showNewImprest() {
-  showModal('Create Imprest Account', `
-    <div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.15);border-radius:var(--r-sm);padding:10px 12px;font-size:12px;color:var(--t2);margin-bottom:14px">
-      <i class="ti ti-info-circle" style="color:var(--gold)"></i> Imprest can be created for an individual staff member or an entire unit/department.
+// Link an imprest account to a petrol station vendor
+async function showLinkImprestVendor(accountId, accountName, currentVendorId) {
+  const vendors = await api('GET', '/api/vendors').catch(() => []);
+  const petrolVendors = vendors.filter(v =>
+    (v.vendor_type || '').toLowerCase().includes('petrol') ||
+    (v.products_services || '').toLowerCase().includes('fuel') ||
+    (v.products_services || '').toLowerCase().includes('diesel') ||
+    (v.products_services || '').toLowerCase().includes('petrol')
+  );
+
+  showModal(`Link Imprest to Vendor — ${sanitise(accountName)}`, `
+    <div style="background:rgba(201,168,76,.07);border:1px solid rgba(201,168,76,.2);border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--text2)">
+      <i class="ti ti-info-circle" style="color:var(--gold)"></i>
+      Linking this imprest account to a petrol station creates a <strong>Fuel Float</strong> —
+      every fuel issuance is automatically debited from this account and a full audit trail is kept.
+      The vendor will gain access to a dashboard showing all requests and their wallet balance.
     </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Account Name</label><input class="form-input" id="ni-name" placeholder="e.g. Ops Petty Cash"></div>
-      <div class="form-group"><label class="form-label">Holder Type</label>
-        <select class="form-input" id="ni-htype" onchange="toggleImprestHolder()">
-          <option value="person">Person (Individual)</option>
-          <option value="unit">Unit / Department</option>
-        </select></div>
+    <div class="form-group">
+      <label class="form-label">Select Vendor to Link</label>
+      <select class="form-input" id="lv-vendor">
+        <option value="">— Unlink (remove current link) —</option>
+        ${petrolVendors.map(v => `
+          <option value="${v.id}" ${v.id == currentVendorId ? 'selected' : ''}>
+            ⛽ ${sanitise(v.company_name || v.name)} — ₦${parseFloat(v.price_per_litre || 0).toLocaleString()}/L
+          </option>`).join('')}
+        ${vendors.filter(v => !petrolVendors.includes(v)).map(v => `
+          <option value="${v.id}" ${v.id == currentVendorId ? 'selected' : ''}>
+            ${sanitise(v.company_name || v.name)}
+          </option>`).join('')}
+      </select>
     </div>
-    <div class="form-group" id="ni-holder-wrap">
-      <label class="form-label" id="ni-holder-label">Staff Member Name</label>
-      <input class="form-input" id="ni-holder" placeholder="Full name of holder">
+    <div class="form-group">
+      <label class="form-label">Link Note (optional)</label>
+      <input class="form-input" id="lv-note" placeholder="e.g. Primary diesel supplier for haulage fleet">
     </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Bank</label><input class="form-input" id="ni-bank" placeholder="Wema Bank"></div>
-      <div class="form-group"><label class="form-label">Account Number</label><input class="form-input" id="ni-acct" placeholder="0123456789"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Opening Float (₦)</label><input class="form-input" type="number" id="ni-bal" placeholder="0.00"></div>
-      <div class="form-group"><label class="form-label">Purpose / Description</label><input class="form-input" id="ni-purpose" placeholder="Monthly petty cash"></div>
-    </div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-primary btn-block" onclick="submitImprest()"><i class="ti ti-wallet"></i> Create Account</button>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="saveLinkImprestVendor(${accountId})">
+        <i class="ti ti-link"></i> Save Link
+      </button>
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-    </div>`);
+    </div>
+  `);
 }
 
-function toggleImprestHolder() {
-  const t = el('ni-htype')?.value;
-  const lbl = el('ni-holder-label');
-  const inp = el('ni-holder');
-  if (lbl) lbl.textContent = t === 'unit' ? 'Unit / Department Name' : 'Staff Member Name';
-  if (inp) inp.placeholder = t === 'unit' ? 'e.g. Operations Lagos' : 'e.g. Emeka Okafor';
+async function saveLinkImprestVendor(accountId) {
+  const vendorId = el('lv-vendor')?.value || null;
+  const note = el('lv-note')?.value || '';
+  try {
+    await api('PATCH', `/api/imprest/${accountId}`, {
+      linked_vendor_id: vendorId || null,
+      account_type: vendorId ? 'fuel_float' : 'personal',
+      link_note: note,
+    });
+    clearCache();
+    closeModal();
+    showToast(vendorId ? 'Imprest linked to vendor — Fuel Float created ✓' : 'Vendor link removed ✓', 'success');
+    pgImprest();
+  } catch(e) { showToast(e.message, 'error'); }
 }
+
+async function showImprestIssuanceLog(accountId, vendorName) {
+  showModal(`Issuance Log — ${sanitise(vendorName)}`, `
+    <div style="text-align:center;padding:20px"><span class="spinner"></span> Loading...</div>
+  `);
+  const logs = await api('GET', `/api/imprest/${accountId}/issuances`).catch(() => []);
+  const modal = document.querySelector('.modal-body');
+  if (!modal) return;
+  modal.innerHTML = `
+    <div style="overflow-x:auto">
+      <table class="data-table">
+        <thead><tr>
+          <th>Date</th><th>Driver</th><th>Vehicle</th><th>Litres</th>
+          <th>Rate (₦/L)</th><th>Amount</th><th>Approver</th><th>Ref</th>
+        </tr></thead>
+        <tbody>
+          ${logs.length ? logs.map(l => `<tr>
+            <td>${fmtDate(l.created_at)}</td>
+            <td>${sanitise(l.driver_name || '—')}</td>
+            <td>${sanitise(l.plate_number || l.vehicle_id || '—')}</td>
+            <td>${parseFloat(l.quantity || 0).toLocaleString()}L</td>
+            <td>₦${parseFloat(l.unit_price || 0).toLocaleString()}</td>
+            <td style="font-weight:700;color:var(--red)">-${fmt(l.amount || 0)}</td>
+            <td>${sanitise(l.approver_name || '—')}</td>
+            <td style="font-size:11px;color:var(--text3)">${sanitise(l.ref_number || '—')}</td>
+          </tr>`).join('') : '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:20px">No issuances yet</td></tr>'}
+        </tbody>
+      </table>
+    </div>`;
+}
+
 
 async function submitImprest() {
   const name = el('ni-name')?.value?.trim();
@@ -7180,6 +7293,454 @@ ${tableEl.outerHTML}
   win.focus();
   setTimeout(() => { win.print(); }, 500);
 }
+async function pgBudget() {
+  const isAdmin = ['real_admin','super_admin','admin'].includes(user.role);
+  const isHOD   = ['real_admin','super_admin','admin','hr','accounts','haulage_manager','operations_manager','compliance'].includes(user.role);
+  const dept    = user.department || user.role?.replace(/_/g,' ') || 'General';
+
+  html('topbar-btn', `
+    <div style="display:flex;gap:6px;align-items:center">
+      ${isAdmin ? `<button class="btn btn-ghost btn-sm" onclick="showSetBudgetPeriod()"><i class="ti ti-calendar-event"></i> Set Period</button>` : ''}
+      <button class="topbar-action" onclick="showNewBudgetItem()"><i class="ti ti-plus"></i></button>
+    </div>`);
+
+  const [items, settings] = await Promise.all([
+    api('GET', '/api/budget/items').catch(() => []),
+    api('GET', '/api/budget/settings').catch(() => ({})),
+  ]);
+
+  const totalBudget = items.reduce((s, i) => s + (+i.amount || 0), 0);
+  const totalSpent  = items.reduce((s, i) => s + (+i.spent || 0), 0);
+  const totalLeft   = totalBudget - totalSpent;
+  const pctUsed     = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
+
+  // Group by department
+  const byDept = {};
+  items.forEach(item => {
+    const d = item.department || 'General';
+    if (!byDept[d]) byDept[d] = [];
+    byDept[d].push(item);
+  });
+
+  const periodLabel = settings.period_label || 'Current Period';
+  const periodFrom  = settings.period_from  ? fmtDate(settings.period_from) : '—';
+  const periodTo    = settings.period_to    ? fmtDate(settings.period_to)   : '—';
+
+  html('page-content', `
+    <!-- ── Banner ── -->
+    <div style="background:linear-gradient(135deg,rgba(16,185,129,.1),rgba(79,142,247,.07));border:1px solid rgba(16,185,129,.2);border-radius:var(--r-md);padding:18px;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--t3)">
+            ${sanitise(periodLabel)} · ${periodFrom} — ${periodTo}
+          </div>
+          <div style="font-size:32px;font-weight:900;color:var(--text);line-height:1.1">${fmt(totalBudget)}</div>
+          <div style="font-size:12px;color:var(--text3)">Total approved budget</div>
+        </div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap">
+          <div style="text-align:right">
+            <div style="font-size:11px;color:var(--text3)">Spent</div>
+            <div style="font-size:20px;font-weight:800;color:var(--red)">${fmt(totalSpent)}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:11px;color:var(--text3)">Remaining</div>
+            <div style="font-size:20px;font-weight:800;color:var(--green)">${fmt(totalLeft)}</div>
+          </div>
+        </div>
+      </div>
+      <!-- Usage bar -->
+      <div style="margin-top:12px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);margin-bottom:4px">
+          <span>Budget used</span><span>${pctUsed}%</span>
+        </div>
+        <div style="height:8px;background:var(--ink3);border-radius:4px;overflow:hidden">
+          <div style="height:100%;width:${Math.min(pctUsed,100)}%;background:${pctUsed>90?'var(--red)':pctUsed>70?'var(--amber)':'var(--green)'};border-radius:4px;transition:width .4s"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Department sections ── -->
+    ${Object.keys(byDept).length ? Object.entries(byDept).map(([deptName, deptItems]) => {
+      const deptTotal = deptItems.reduce((s,i) => s+(+i.amount||0), 0);
+      const deptSpent = deptItems.reduce((s,i) => s+(+i.spent||0), 0);
+      const canRequest = isHOD && (user.department === deptName || isAdmin);
+      return `
+      <div style="margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="font-weight:700;font-size:13px;color:var(--text)">${sanitise(deptName)}</div>
+          <div style="font-size:12px;color:var(--text3)">${fmt(deptSpent)} of ${fmt(deptTotal)}</div>
+        </div>
+        ${deptItems.map(item => {
+          const pct = item.amount > 0 ? Math.round((item.spent||0)/item.amount*100) : 0;
+          const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--amber)' : 'var(--accent)';
+          return `
+          <div class="card" style="margin-bottom:8px;padding:12px 14px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+              <div style="flex:1">
+                <div style="font-weight:600;font-size:13px">${sanitise(item.title)}</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:2px">${sanitise(item.description || '')}</div>
+                <div style="height:5px;background:var(--ink3);border-radius:3px;margin-top:8px;overflow:hidden">
+                  <div style="height:100%;width:${Math.min(pct,100)}%;background:${barColor};border-radius:3px"></div>
+                </div>
+                <div style="font-size:10px;color:var(--text3);margin-top:3px">${pct}% used · ${fmt(item.amount - (item.spent||0))} remaining</div>
+              </div>
+              <div style="text-align:right;flex-shrink:0">
+                <div style="font-size:16px;font-weight:800;color:var(--text)">${fmt(item.amount)}</div>
+                <span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:${item.status==='approved'?'rgba(34,197,94,.15)':'rgba(245,158,11,.15)'};color:${item.status==='approved'?'#4ade80':'var(--amber)'}">${item.status || 'draft'}</span>
+                ${canRequest && item.status === 'approved' ? `
+                <div style="margin-top:6px">
+                  <button class="btn btn-primary btn-sm" style="font-size:10px" onclick="requestBudgetPayment(${item.id},'${sanitise(item.title)}',${item.amount-(item.spent||0)})">
+                    <i class="ti ti-send"></i> Request Payment
+                  </button>
+                </div>` : ''}
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    }).join('') : `
+      <div class="empty-state">
+        <div class="empty-icon"><i class="ti ti-report-money"></i></div>
+        <div class="empty-title">No budget items yet</div>
+        <div class="empty-sub">Click + to post a budget item for your department</div>
+      </div>`}
+  `);
+}
+
+function showNewBudgetItem() {
+  showModal('Post Budget Item', `
+    <div class="form-group">
+      <label class="form-label">Title *</label>
+      <input class="form-input" id="bi-title" placeholder="e.g. Q3 Vehicle Maintenance">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Department</label>
+        <input class="form-input" id="bi-dept" value="${sanitise(user.department || user.role?.replace(/_/g,' ') || '')}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Amount (₦) *</label>
+        <input class="form-input" type="number" id="bi-amount" placeholder="0">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Description / Justification</label>
+      <textarea class="form-input" id="bi-desc" rows="3" placeholder="What is this budget for? Why is it needed?"></textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">From Date</label>
+        <input class="form-input" type="date" id="bi-from">
+      </div>
+      <div class="form-group">
+        <label class="form-label">To Date</label>
+        <input class="form-input" type="date" id="bi-to">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="submitBudgetItem()">
+        <i class="ti ti-send"></i> Post Budget Item
+      </button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+async function submitBudgetItem() {
+  const title  = el('bi-title')?.value?.trim();
+  const amount = el('bi-amount')?.value;
+  if (!title || !amount) { showToast('Title and amount are required', 'error'); return; }
+  try {
+    await api('POST', '/api/budget/items', {
+      title, amount: +amount,
+      department:   el('bi-dept')?.value?.trim() || user.department || user.role,
+      description:  el('bi-desc')?.value?.trim(),
+      date_from:    el('bi-from')?.value || null,
+      date_to:      el('bi-to')?.value  || null,
+      posted_by:    user.full_name || user.name,
+      status:       'pending',
+    });
+    clearCache();
+    closeModal();
+    showToast('Budget item posted ✓', 'success');
+    pgBudget();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function requestBudgetPayment(itemId, itemTitle, maxAmount) {
+  showModal(`Request Payment — ${sanitise(itemTitle)}`, `
+    <div style="background:rgba(79,142,247,.07);border:1px solid rgba(79,142,247,.2);border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px">
+      <i class="ti ti-info-circle" style="color:var(--accent)"></i>
+      This will create a payment request in the Payments module for approval.
+      Available budget: <strong>${fmt(maxAmount)}</strong>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Amount to Request (₦) *</label>
+        <input class="form-input" type="number" id="bp-amt" placeholder="0" max="${maxAmount}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Category</label>
+        <select class="form-input" id="bp-cat">
+          <option>Operations</option><option>Maintenance</option><option>HR</option>
+          <option>Admin</option><option>Finance</option><option>Logistics</option><option>Other</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Narration</label>
+      <input class="form-input" id="bp-desc" value="${sanitise(itemTitle)}">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="submitBudgetPaymentRequest(${itemId},${maxAmount})">
+        <i class="ti ti-arrow-right"></i> Send to Payments
+      </button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+async function submitBudgetPaymentRequest(itemId, maxAmount) {
+  const amount = +(el('bp-amt')?.value || 0);
+  if (!amount || amount <= 0) { showToast('Enter a valid amount', 'error'); return; }
+  if (amount > maxAmount) { showToast(`Amount exceeds available budget of ${fmt(maxAmount)}`, 'error'); return; }
+  try {
+    await api('POST', '/api/requests', {
+      description:  el('bp-desc')?.value || '',
+      amount,
+      category:     el('bp-cat')?.value || 'Operations',
+      priority:     'normal',
+      budget_item_id: itemId,
+      source:       'budget',
+    });
+    clearCache();
+    closeModal();
+    showToast('Payment request created and sent for approval ✓', 'success');
+    navigate('requests');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+function showSetBudgetPeriod() {
+  showModal('Set Budget Period', `
+    <div class="form-group">
+      <label class="form-label">Period Label</label>
+      <input class="form-input" id="bp-label" placeholder="e.g. Q3 2026, July Budget">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">From *</label>
+        <input class="form-input" type="date" id="bp-from">
+      </div>
+      <div class="form-group">
+        <label class="form-label">To *</label>
+        <input class="form-input" type="date" id="bp-to">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="saveBudgetPeriod()">Save Period</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+async function saveBudgetPeriod() {
+  const label = el('bp-label')?.value;
+  const from  = el('bp-from')?.value;
+  const to    = el('bp-to')?.value;
+  if (!from || !to) { showToast('Set both from and to dates', 'error'); return; }
+  try {
+    await api('POST', '/api/budget/settings', { period_label: label, period_from: from, period_to: to });
+    clearCache(); closeModal();
+    showToast('Budget period updated ✓', 'success');
+    pgBudget();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function pgVendorPortal() {
+  const isAdmin = ['real_admin','super_admin','admin'].includes(user.role);
+  if (!isAdmin) { html('page-content','<div class="empty-state"><div class="empty-icon"><i class="ti ti-lock"></i></div><div class="empty-title">Admin only</div></div>'); return; }
+
+  html('topbar-btn', `
+    <button class="topbar-action" onclick="showCreateVendorUser()"><i class="ti ti-plus"></i></button>`);
+
+  const [vendors, vendorUsers] = await Promise.all([
+    api('GET', '/api/vendors').catch(() => []),
+    api('GET', '/api/vendor-users').catch(() => []),
+  ]);
+
+  // Group vendor users by vendor
+  const usersByVendor = {};
+  vendorUsers.forEach(u => {
+    if (!usersByVendor[u.vendor_id]) usersByVendor[u.vendor_id] = [];
+    usersByVendor[u.vendor_id].push(u);
+  });
+
+  html('page-content', `
+    <div style="background:rgba(201,168,76,.07);border:1px solid rgba(201,168,76,.2);border-radius:10px;padding:14px;margin-bottom:16px;font-size:12px;color:var(--text2)">
+      <i class="ti ti-info-circle" style="color:var(--gold)"></i>
+      Vendors with an active portal account can log in at
+      <strong style="color:var(--gold)">${window.location.origin}/vendor</strong>
+      to view fuel requests assigned to them, confirm issuances, see their wallet balance,
+      and manage their own dispenser sub-accounts.
+    </div>
+
+    ${vendors.map(v => {
+      const vUsers = usersByVendor[v.id] || [];
+      const adminUser = vUsers.find(u => u.role === 'vendor_admin');
+      const dispensers = vUsers.filter(u => u.role === 'vendor_dispenser');
+      const isPetrol = (v.vendor_type || '').toLowerCase().includes('petrol') ||
+        (v.products_services || '').toLowerCase().includes('fuel') ||
+        (v.products_services || '').toLowerCase().includes('diesel');
+      return `
+      <div class="card" style="margin-bottom:10px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px">
+          <div>
+            <div style="font-size:15px;font-weight:700">${sanitise(v.company_name || v.name)}</div>
+            <div style="font-size:12px;color:var(--text3)">${isPetrol ? '⛽ Petrol Station' : sanitise(v.vendor_type || 'Supplier')}</div>
+          </div>
+          <div style="text-align:right">
+            ${adminUser
+              ? `<span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;background:rgba(34,197,94,.15);color:#4ade80">
+                  Portal Active · ${vUsers.filter(u=>u.status!=='suspended').length} users
+                </span>`
+              : `<span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;background:rgba(100,100,100,.15);color:var(--text3)">
+                  No portal access
+                </span>`}
+          </div>
+        </div>
+
+        ${adminUser ? `
+        <div style="background:var(--ink3);border-radius:8px;padding:10px;margin-bottom:10px">
+          <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:8px">Portal Users</div>
+          ${vUsers.map(pu => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
+              <div>
+                <span style="font-weight:600">${sanitise(pu.full_name)}</span>
+                <span style="color:var(--text3)"> · ${sanitise(pu.email)}</span>
+                <span style="font-size:10px;margin-left:6px;padding:1px 6px;border-radius:8px;background:${pu.role==='vendor_admin'?'rgba(201,168,76,.15)':'rgba(79,142,247,.12)'};color:${pu.role==='vendor_admin'?'var(--gold)':'var(--accent)'}">
+                  ${pu.role === 'vendor_admin' ? 'Admin' : 'Dispenser'}
+                </span>
+              </div>
+              <div style="display:flex;gap:6px">
+                ${pu.status === 'suspended'
+                  ? `<button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="toggleVendorUser(${pu.id},'active')"><i class="ti ti-player-play"></i> Unsuspend</button>`
+                  : `<button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" onclick="toggleVendorUser(${pu.id},'suspended')"><i class="ti ti-ban"></i> Suspend</button>`}
+              </div>
+            </div>`).join('')}
+        </div>` : ''}
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${!adminUser
+            ? `<button class="btn btn-primary btn-sm" onclick="showCreateVendorUser(${v.id},'${sanitise(v.company_name||v.name)}','vendor_admin')">
+                <i class="ti ti-user-plus"></i> Create Portal Access
+              </button>`
+            : `<button class="btn btn-ghost btn-sm" onclick="showCreateVendorUser(${v.id},'${sanitise(v.company_name||v.name)}','vendor_dispenser')">
+                <i class="ti ti-user-plus"></i> Add Dispenser
+              </button>`}
+          ${adminUser ? `
+          <button class="btn btn-ghost btn-sm" onclick="resendVendorCredentials(${adminUser.id})">
+            <i class="ti ti-mail"></i> Resend Credentials
+          </button>` : ''}
+        </div>
+      </div>`;
+    }).join('') || '<div class="empty-state"><div class="empty-icon"><i class="ti ti-building-store"></i></div><div class="empty-title">No vendors registered yet</div></div>'}
+  `);
+}
+
+function showCreateVendorUser(vendorId, vendorName, role) {
+  showModal(`Create Vendor Portal User${vendorName ? ' — '+sanitise(vendorName) : ''}`, `
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Full Name *</label>
+        <input class="form-input" id="vu-name" placeholder="Contact person name">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email *</label>
+        <input class="form-input" type="email" id="vu-email" placeholder="vendor@example.com">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Phone</label>
+        <input class="form-input" type="tel" id="vu-phone" placeholder="08012345678">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Role</label>
+        <select class="form-input" id="vu-role">
+          <option value="vendor_admin" ${role==='vendor_admin'?'selected':''}>Vendor Admin (full access + sub-accounts)</option>
+          <option value="vendor_dispenser" ${role==='vendor_dispenser'?'selected':''}>Dispenser (view requests + confirm issuance only)</option>
+        </select>
+      </div>
+    </div>
+    ${!vendorId ? `
+    <div class="form-group">
+      <label class="form-label">Vendor</label>
+      <select class="form-input" id="vu-vendor"></select>
+    </div>` : `<input type="hidden" id="vu-vendor" value="${vendorId}">`}
+    <div style="background:rgba(79,142,247,.07);border:1px solid rgba(79,142,247,.2);border-radius:8px;padding:10px;margin:10px 0;font-size:12px">
+      <i class="ti ti-lock"></i> A secure temporary password will be generated and shown once.
+      Share it with the vendor to let them log in and set their own password.
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="submitCreateVendorUser(${vendorId || 'null'})">
+        <i class="ti ti-user-plus"></i> Create Account
+      </button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+async function submitCreateVendorUser(vendorId) {
+  const name  = el('vu-name')?.value?.trim();
+  const email = el('vu-email')?.value?.trim();
+  const vId   = vendorId || el('vu-vendor')?.value;
+  if (!name || !email) { showToast('Name and email are required', 'error'); return; }
+  if (!vId) { showToast('Select a vendor', 'error'); return; }
+  try {
+    const result = await api('POST', '/api/vendor-users', {
+      vendor_id:  vId,
+      full_name:  name,
+      email,
+      phone:      el('vu-phone')?.value?.trim(),
+      role:       el('vu-role')?.value || 'vendor_admin',
+    });
+    clearCache();
+    closeModal();
+    // Show the temporary password
+    const tmpPwd = result.temp_password;
+    showModal('Portal Account Created ✓', `
+      <div style="text-align:center;padding:10px 0">
+        <div style="font-size:40px;margin-bottom:8px">🎉</div>
+        <div style="font-size:15px;font-weight:700;margin-bottom:4px">Account created for ${sanitise(name)}</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:16px">Share these credentials with the vendor:</div>
+        <div style="background:var(--ink3);border-radius:10px;padding:16px;text-align:left;font-family:monospace;font-size:13px">
+          <div><span style="color:var(--text3)">Login URL:</span> <strong>${window.location.origin}/vendor</strong></div>
+          <div style="margin-top:8px"><span style="color:var(--text3)">Email:</span> <strong>${sanitise(email)}</strong></div>
+          <div style="margin-top:4px"><span style="color:var(--text3)">Temp password:</span> <strong style="color:var(--gold)">${sanitise(tmpPwd || 'VMO2026!')}</strong></div>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:12px">The vendor should change their password on first login.</div>
+      </div>
+      <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="closeModal();pgVendorPortal()">Done</button>
+    `);
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function toggleVendorUser(userId, newStatus) {
+  try {
+    await api('PATCH', `/api/vendor-users/${userId}`, { status: newStatus });
+    clearCache();
+    showToast(newStatus === 'suspended' ? 'Account suspended' : 'Account reactivated ✓', 'success');
+    pgVendorPortal();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function resendVendorCredentials(userId) {
+  try {
+    await api('POST', `/api/vendor-users/${userId}/resend`);
+    showToast('Credentials resent ✓', 'success');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
 
 // ── AUDIT ─────────────────────────────────────────────────────────────────────
 async function pgAudit() {
@@ -8798,68 +9359,133 @@ async function downloadWaybillReport() {
 }
 
 async function showNewTrip() {
-  const companies = window._tripCompanies || await api('GET','/api/companies').catch(()=>[]);
-  const firstCo = companies[0];
+  const companies = window._tripCompanies || await api('GET', '/api/companies').catch(() => []);
+  const firstCo   = companies[0];
   let coVehicles = [], coDrivers = [];
   if (firstCo) {
     [coVehicles, coDrivers] = await Promise.all([
-      api('GET',`/api/companies/${firstCo.id}/vehicles`).catch(()=>[]),
-      api('GET',`/api/companies/${firstCo.id}/drivers`).catch(()=>[]),
+      api('GET', `/api/companies/${firstCo.id}/vehicles`).catch(() => []),
+      api('GET', `/api/companies/${firstCo.id}/drivers`).catch(()  => []),
     ]);
   }
-  const REASON_CODES = [['01','To Trip'],['02','From Trip'],['03','At Customer'],['04','On Site'],['05','Break Down'],['06','Task Force/Police'],['07','Dispatch Delay'],['08','Driver Idling'],['09','No Driver']];
-  const today = new Date().toISOString().slice(0,10);
+
+  const REASON_CODES = [
+    ['01','To Trip'],['02','From Trip'],['03','At Customer'],['04','On Site'],
+    ['05','Break Down'],['06','Task Force/Police'],['07','Dispatch Delay'],
+    ['08','Driver Idling'],['09','No Driver'],
+  ];
+  const today = new Date().toISOString().slice(0, 10);
 
   showModal('Log New Trip', `
-    <!-- Company + Date -->
+    <!-- ─── Company + Date ─────────────────────────────── -->
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Company / Unit *</label>
+      <div class="form-group">
+        <label class="form-label">Company / Unit *</label>
         <select class="form-input" id="nt-co" onchange="loadCompanyAssets()">
-          ${companies.map(c=>`<option value="${c.id}" data-diesel="${c.diesel_price_per_litre||990}">${sanitise(c.name)}</option>`).join('')}
-        </select></div>
-      <div class="form-group"><label class="form-label">Trip Date *</label>
-        <input class="form-input" type="date" id="nt-date" value="${today}"></div>
+          ${companies.map(c => `<option value="${c.id}" data-diesel="${c.diesel_price_per_litre || 990}">${sanitise(c.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Trip Date *</label>
+        <input class="form-input" type="date" id="nt-date" value="${today}">
+      </div>
     </div>
 
-    <!-- Waybill + Invoice -->
+    <!-- ─── Waybill + Invoice ───────────────────────────── -->
     <div class="form-row">
-      <div class="form-group"><label class="form-label">① Waybill No. *</label>
-        <input class="form-input" id="nt-waybill" placeholder="WB-2026-001"></div>
-      <div class="form-group"><label class="form-label">② Invoice Number</label>
-        <input class="form-input" id="nt-invoice" placeholder="INV-2026-001"></div>
+      <div class="form-group">
+        <label class="form-label">① Waybill No. *</label>
+        <input class="form-input" id="nt-waybill" placeholder="WB-2026-001" oninput="clearTripLockWarning()">
+      </div>
+      <div class="form-group">
+        <label class="form-label">② Invoice Number</label>
+        <input class="form-input" id="nt-invoice" placeholder="INV-2026-001">
+      </div>
     </div>
 
-    <!-- Vehicle + Driver -->
+    <!-- ─── Vehicle + Driver ───────────────────────────── -->
     <div class="form-row">
-      <div class="form-group"><label class="form-label">④ Vehicle Reg No. *</label>
-        <select class="form-input" id="nt-veh">
-          ${coVehicles.map(v=>`<option value="${v.id}">${v.plate_number}</option>`).join('')}
-        </select></div>
-      <div class="form-group"><label class="form-label">Driver *</label>
+      <div class="form-group">
+        <label class="form-label">④ Vehicle Reg No. *</label>
+        <select class="form-input" id="nt-veh" onchange="checkVehicleOpenTrip()">
+          <option value="">— select vehicle —</option>
+          ${coVehicles.map(v => `<option value="${v.id}" data-plate="${v.plate_number}" data-type="${v.vehicle_group || 'pool'}">${sanitise(v.plate_number)}</option>`).join('')}
+        </select>
+        <!-- Open-trip warning injected here by checkVehicleOpenTrip() -->
+        <div id="nt-vehicle-lock" style="display:none;margin-top:6px;padding:10px 12px;background:rgba(239,68,68,.1);border:1.5px solid rgba(239,68,68,.4);border-radius:8px;font-size:12px;color:#f87171">
+          <i class="ti ti-lock" style="margin-right:5px"></i>
+          <span id="nt-lock-msg"></span>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Driver *</label>
         <select class="form-input" id="nt-drv">
-          ${coDrivers.map(d=>`<option value="${d.id}">${d.full_name||d.name}</option>`).join('')}
-        </select></div>
+          <option value="">— select driver —</option>
+          ${coDrivers.map(d => `<option value="${d.id}">${sanitise(d.full_name || d.name)}</option>`).join('')}
+        </select>
+      </div>
     </div>
 
-    <!-- Loading + Destination -->
+    <!-- ─── LOADING WAYBILL ATTACHMENT ────────────────── -->
+    <div style="background:rgba(239,68,68,.06);border:1.5px dashed rgba(239,68,68,.4);border-radius:10px;padding:14px;margin:4px 0 12px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <i class="ti ti-file-upload" style="color:var(--red);font-size:16px"></i>
+        <span style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px">
+          Loading Waybill — Required before truck leaves (up to 4 documents)
+        </span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:4px">Document 1 *</label>
+          <input type="file" id="nt-wb-1" accept="image/*,application/pdf" class="form-input" style="padding:6px;font-size:11px">
+        </div>
+        <div>
+          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:4px">Document 2 (optional)</label>
+          <input type="file" id="nt-wb-2" accept="image/*,application/pdf" class="form-input" style="padding:6px;font-size:11px">
+        </div>
+        <div>
+          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:4px">Document 3 (optional)</label>
+          <input type="file" id="nt-wb-3" accept="image/*,application/pdf" class="form-input" style="padding:6px;font-size:11px">
+        </div>
+        <div>
+          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:4px">Document 4 (optional)</label>
+          <input type="file" id="nt-wb-4" accept="image/*,application/pdf" class="form-input" style="padding:6px;font-size:11px">
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--text3);margin-top:8px">
+        <i class="ti ti-info-circle"></i> Snap or upload the loading waybill. This is mandatory — the trip cannot be saved without it.
+      </div>
+    </div>
+
+    <!-- ─── Loading + Destination ─────────────────────── -->
     <div class="form-row">
-      <div class="form-group"><label class="form-label">⑤ Loading Location</label>
-        <input class="form-input" id="nt-load" placeholder="e.g. ABINBEV ONITSHA"></div>
-      <div class="form-group"><label class="form-label">⑥ Destination</label>
-        <input class="form-input" id="nt-offload" placeholder="e.g. Warri"></div>
+      <div class="form-group">
+        <label class="form-label">⑤ Loading Location</label>
+        <input class="form-input" id="nt-load" placeholder="e.g. ABINBEV ONITSHA">
+      </div>
+      <div class="form-group">
+        <label class="form-label">⑥ Destination</label>
+        <input class="form-input" id="nt-offload" placeholder="e.g. Warri">
+      </div>
     </div>
 
-    <!-- Distance + Transit time -->
+    <!-- ─── Distance + Transit ────────────────────────── -->
     <div class="form-row">
-      <div class="form-group"><label class="form-label">⑦ Standard Trip Distance (km)</label>
-        <input class="form-input" id="nt-km" type="number" placeholder="e.g. 57"></div>
-      <div class="form-group"><label class="form-label">Standard Transit (hrs each way)</label>
-        <input class="form-input" id="nt-transit" type="number" placeholder="e.g. 2.5"></div>
+      <div class="form-group">
+        <label class="form-label">⑦ Standard Trip Distance (km)</label>
+        <input class="form-input" id="nt-km" type="number" placeholder="e.g. 57">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Standard Transit (hrs each way)</label>
+        <input class="form-input" id="nt-transit" type="number" placeholder="e.g. 2.5">
+      </div>
     </div>
 
-    <!-- Customer — single by default, multi-customer toggle -->
+    <!-- ─── Customer Delivery ─────────────────────────── -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 6px">
-      <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">👤 Customer Delivery</div>
+      <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">
+        👤 Customer Delivery
+      </div>
       <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text2)">
         <input type="checkbox" id="nt-multi-toggle" onchange="toggleMultiCustomer()" style="accent-color:var(--gold)">
         Multiple delivery points
@@ -8869,13 +9495,19 @@ async function showNewTrip() {
     <!-- Single customer (default) -->
     <div id="nt-single-cust">
       <div class="form-row">
-        <div class="form-group"><label class="form-label">Customer Name *</label>
-          <input class="form-input" id="nt-cust" placeholder="e.g. JUNDO BROTHERS"></div>
-        <div class="form-group"><label class="form-label">Customer Phone</label>
-          <input class="form-input" id="nt-phone" type="tel" placeholder="08012345678"></div>
+        <div class="form-group">
+          <label class="form-label">Customer Name *</label>
+          <input class="form-input" id="nt-cust" placeholder="e.g. JUNDO BROTHERS">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Customer Phone</label>
+          <input class="form-input" id="nt-phone" type="tel" placeholder="08012345678">
+        </div>
       </div>
-      <div class="form-group"><label class="form-label">Delivery Address</label>
-        <input class="form-input" id="nt-cust-addr" placeholder="Full delivery address"></div>
+      <div class="form-group">
+        <label class="form-label">Delivery Address</label>
+        <input class="form-input" id="nt-cust-addr" placeholder="Full delivery address">
+      </div>
     </div>
 
     <!-- Multi-customer block (hidden until toggled) -->
@@ -8884,89 +9516,170 @@ async function showNewTrip() {
         <div style="font-size:11px;color:var(--amber);margin-bottom:10px">
           <i class="ti ti-info-circle"></i> All fields below are compulsory for multi-point deliveries.
         </div>
-        <div id="nt-cust-rows">
-          <!-- rows injected by addCustomerRow() -->
-        </div>
+        <div id="nt-cust-rows"></div>
         <button class="btn btn-ghost btn-sm" onclick="addCustomerRow()" style="font-size:11px;margin-top:6px">
           <i class="ti ti-plus"></i> Add Delivery Point
         </button>
       </div>
     </div>
 
-    <!-- Shipment + Load details -->
+    <!-- ─── Shipment + Load details ───────────────────── -->
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Shipment No.</label>
-        <input class="form-input" id="nt-ship" placeholder="285029"></div>
-      <div class="form-group"><label class="form-label">⑭ Load Details (sold-to)</label>
-        <input class="form-input" id="nt-load-desc" placeholder="e.g. Corn Malt 15 tons, qty 1"></div>
+      <div class="form-group">
+        <label class="form-label">Shipment No.</label>
+        <input class="form-input" id="nt-ship" placeholder="285029">
+      </div>
+      <div class="form-group">
+        <label class="form-label">⑭ Load Details (sold-to)</label>
+        <input class="form-input" id="nt-load-desc" placeholder="e.g. Corn Malt 15 tons, qty 1">
+      </div>
     </div>
 
-    <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 8px">⏱ Plant & Depot Timestamps</div>
+    <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 8px">
+      ⏱ Plant & Depot Timestamps
+    </div>
 
-    <!-- Plant times -->
     <div class="form-row">
-      <div class="form-group"><label class="form-label">⑨ Plant Arrival (m/d/yy h:mm)</label>
-        <input class="form-input" type="datetime-local" id="nt-plant-arr" oninput="calcWaitTimes()"></div>
-      <div class="form-group"><label class="form-label">⑩ Plant Departure (m/d/yy h:mm)</label>
-        <input class="form-input" type="datetime-local" id="nt-plant-dep" oninput="calcWaitTimes()"></div>
+      <div class="form-group">
+        <label class="form-label">⑨ Plant Arrival</label>
+        <input class="form-input" type="datetime-local" id="nt-plant-arr" oninput="calcWaitTimes()">
+      </div>
+      <div class="form-group">
+        <label class="form-label">⑩ Plant Departure</label>
+        <input class="form-input" type="datetime-local" id="nt-plant-dep" oninput="calcWaitTimes()">
+      </div>
     </div>
     <div class="form-group">
-      <label class="form-label">⑪ In-Plant Waiting Time (hrs) — auto</label>
-      <input class="form-input" id="nt-plant-wait" placeholder="Auto-calculated" readonly style="background:var(--bg3)">
+      <label class="form-label">⑪ In-Plant Waiting Time (hrs) — auto-calculated</label>
+      <input class="form-input" id="nt-plant-wait" placeholder="Fill plant times above" readonly style="background:var(--bg3)">
     </div>
 
-    <!-- Depot/Customer times -->
     <div class="form-row">
-      <div class="form-group"><label class="form-label">⑫ Depot/Customer Arrival (m/d/yy h:mm)</label>
-        <input class="form-input" type="datetime-local" id="nt-depot-arr" oninput="calcWaitTimes()"></div>
-      <div class="form-group"><label class="form-label">Customer Departure (m/d/yy h:mm)</label>
-        <input class="form-input" type="datetime-local" id="nt-depot-dep" oninput="calcWaitTimes()"></div>
+      <div class="form-group">
+        <label class="form-label">⑫ Depot/Customer Arrival</label>
+        <input class="form-input" type="datetime-local" id="nt-depot-arr" oninput="calcWaitTimes()">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Customer Departure</label>
+        <input class="form-input" type="datetime-local" id="nt-depot-dep" oninput="calcWaitTimes()">
+      </div>
     </div>
     <div class="form-group">
-      <label class="form-label">⑮ Customer Waiting Time (hrs) — auto</label>
-      <input class="form-input" id="nt-cust-wait" placeholder="Auto-calculated" readonly style="background:var(--bg3)">
+      <label class="form-label">⑮ Customer Waiting Time (hrs) — auto-calculated</label>
+      <input class="form-input" id="nt-cust-wait" placeholder="Fill customer times above" readonly style="background:var(--bg3)">
     </div>
 
     <div class="form-group">
-      <label class="form-label">⑯ Return Plant Arrival (m/d/yy h:mm)</label>
+      <label class="form-label">⑯ Return Plant Arrival</label>
       <input class="form-input" type="datetime-local" id="nt-return-arr">
     </div>
 
-    <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 8px">💰 Revenue & Fuel</div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Rate (₦/ton or ₦/trip)</label>
-        <input class="form-input" id="nt-rate" type="number" placeholder="0" oninput="calcTripRevenue()"></div>
-      <div class="form-group"><label class="form-label">Pallets / Qty</label>
-        <input class="form-input" id="nt-pallet" type="number" placeholder="0"></div>
+    <div style="font-weight:700;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 8px">
+      💰 Revenue & Fuel
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Outward Value (₦)</label>
-        <input class="form-input" id="nt-outval" type="number" placeholder="0"></div>
-      <div class="form-group"><label class="form-label">Return Value (₦)</label>
-        <input class="form-input" id="nt-retval" type="number" placeholder="0"></div>
+      <div class="form-group">
+        <label class="form-label">Rate (₦/ton or ₦/trip)</label>
+        <input class="form-input" id="nt-rate" type="number" placeholder="0" oninput="calcTripRevenue()">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Pallets / Qty</label>
+        <input class="form-input" id="nt-pallet" type="number" placeholder="0">
+      </div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Total Diesel (L)</label>
-        <input class="form-input" id="nt-diesel" type="number" placeholder="0" oninput="calcTripRevenue()"></div>
-      <div class="form-group"><label class="form-label">BIT Allowance (₦)</label>
-        <input class="form-input" id="nt-bit" type="number" placeholder="0"></div>
+      <div class="form-group">
+        <label class="form-label">Outward Value (₦)</label>
+        <input class="form-input" id="nt-outval" type="number" placeholder="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Return Value (₦)</label>
+        <input class="form-input" id="nt-retval" type="number" placeholder="0">
+      </div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Area / Region</label>
-        <input class="form-input" id="nt-area" placeholder="e.g. Delta, Anambra"></div>
-      <div class="form-group"><label class="form-label">Availability Code</label>
+      <div class="form-group">
+        <label class="form-label">Total Diesel (L)</label>
+        <input class="form-input" id="nt-diesel" type="number" placeholder="0" oninput="calcTripRevenue()">
+      </div>
+      <div class="form-group">
+        <label class="form-label">BIT Allowance (₦)</label>
+        <input class="form-input" id="nt-bit" type="number" placeholder="0">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Area / Region</label>
+        <input class="form-input" id="nt-area" placeholder="e.g. Delta, Anambra">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Availability Code</label>
         <select class="form-input" id="nt-avail">
-          ${REASON_CODES.map(([code,label])=>`<option value="${code}">${code} — ${label}</option>`).join('')}
-        </select></div>
+          ${REASON_CODES.map(([code, label]) => `<option value="${code}">${code} — ${label}</option>`).join('')}
+        </select>
+      </div>
     </div>
-    <div class="form-group"><label class="form-label">Notes</label>
-      <input class="form-input" id="nt-notes" placeholder="Any additional info..."></div>
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <input class="form-input" id="nt-notes" placeholder="Any additional info...">
+    </div>
 
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn btn-primary btn-block" onclick="submitNewTrip()">Save Trip</button>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-primary btn-block" id="nt-submit-btn" onclick="submitNewTrip()">
+        <i class="ti ti-device-floppy"></i> Save Trip
+      </button>
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
     </div>
   `, 'lg');
+
+  // Auto-init multi-customer rows
+  addCustomerRow(); addCustomerRow();
+}
+
+// Check if selected vehicle has an open unclosed trip — called when vehicle changes
+async function checkVehicleOpenTrip() {
+  const sel  = el('nt-veh');
+  const lock = el('nt-vehicle-lock');
+  const msg  = el('nt-lock-msg');
+  const btn  = el('nt-submit-btn');
+  if (!sel || !lock) return;
+
+  const vehicleId = sel.value;
+  if (!vehicleId) { lock.style.display = 'none'; return; }
+
+  const plate     = sel.options[sel.selectedIndex]?.dataset?.plate || vehicleId;
+  const vehType   = (sel.options[sel.selectedIndex]?.dataset?.type || '').toLowerCase();
+
+  // Only enforce lock for haulage trucks (not pool cars)
+  if (!['haulage','truck'].includes(vehType)) { lock.style.display = 'none'; return; }
+
+  try {
+    const trips = await api('GET', `/api/trips?vehicle_id=${vehicleId}&status=open`).catch(() => []);
+    const openTrips = Array.isArray(trips) ? trips.filter(t => t.trip_status !== 'closed') : [];
+
+    if (openTrips.length) {
+      const openTrip = openTrips[0];
+      const name = user?.full_name?.split(' ')?.[0] || 'there';
+      msg.innerHTML = `${name}, this truck (${sanitise(plate)}) has an open trip 
+        <strong>${sanitise(openTrip.waybill_number || '#' + openTrip.id)}</strong> 
+        that has not been closed out and debit declared. 
+        Close out the previous trip before loading this truck again.`;
+      lock.style.display = 'block';
+      if (btn) btn.disabled = true;
+    } else {
+      lock.style.display = 'none';
+      if (btn) btn.disabled = false;
+    }
+  } catch {
+    lock.style.display = 'none';
+  }
+}
+
+function clearTripLockWarning() {
+  const lock = el('nt-vehicle-lock');
+  const btn  = el('nt-submit-btn');
+  if (lock) lock.style.display = 'none';
+  if (btn)  btn.disabled = false;
 }
 
 
