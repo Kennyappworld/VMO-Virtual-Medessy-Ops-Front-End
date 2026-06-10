@@ -2110,9 +2110,10 @@ async function showNewFuel(preShipment) {
       <div class="form-group"><label class="form-label">Vehicle</label>
         <select class="form-input" id="nf-veh" onchange="autoFillFuelFromVehicle()">
           <option value="">— Select vehicle —</option>
-          ${vehicles.map(v=>`<option value="${v.id}" data-plate="${v.plate_number||''}" data-cat="${v.vehicle_category||''}" data-ftype="${v.fuel_type||''}">${v.plate_number||v.id}</option>`).join('')}
+          ${vehicles.map(v=>`<option value="${v.id}" data-plate="${v.plate_number||''}" data-cat="${v.vehicle_category||''}" data-ftype="${v.fuel_type||''}" data-vtype="${v.vehicle_type||''}">${v.plate_number||v.id}</option>`).join('')}
         </select></div>
     </div>
+    <div id="nf-vehicle-warning" style="display:none;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px;margin-bottom:8px;font-size:12px;color:var(--red)"></div>
     ${isSupervisor ? `<div class="form-row">
       <div class="form-group"><label class="form-label">Driver (on behalf of)</label>
         <select class="form-input" id="nf-driver" onchange="autoFillDriverDetails()">
@@ -3368,12 +3369,15 @@ function autoFillDriverDetails() {
   if (el('nf-dname') && opt.dataset.name) el('nf-dname').value = opt.dataset.name;
 }
 
-function autoFillFuelFromVehicle() {
+async function autoFillFuelFromVehicle() {
   const sel = el('nf-veh');
   if (!sel) return;
   const opt = sel.options[sel.selectedIndex];
   if (!opt) return;
   const ft = opt.dataset.ftype;
+  const vtype = opt.dataset.vtype || '';
+  const vehicleId = opt.value;
+
   if (ft && el('nf-type')) {
     const typeSelect = el('nf-type');
     for (let i=0;i<typeSelect.options.length;i++) {
@@ -3381,6 +3385,44 @@ function autoFillFuelFromVehicle() {
         typeSelect.selectedIndex=i; break;
       }
     }
+  }
+
+  // For haulage trucks: check for open unclosed trip (debit not declared)
+  const isHaulage = ['haulage'].includes(vtype) || opt.dataset.cat?.toLowerCase().includes('haul') ||
+    opt.dataset.cat?.toLowerCase().includes('ton') || ft==='Diesel' || ft==='CNG' || ft==='LNG';
+
+  if (isHaulage && vehicleId) {
+    const warn = el('nf-vehicle-warning');
+    if (!warn) return;
+    warn.style.display = 'none';
+    try {
+      const openTrips = await api('GET', `/api/trips?vehicle_id=${vehicleId}&open=1`).catch(()=>[]);
+      const blocked = openTrips.find(t => {
+        const notClosed = !['closed'].includes(t.trip_status||'');
+        const debitPending = !t.no_debit && !t.outward_value && !t.return_value;
+        return notClosed || debitPending;
+      });
+      if (blocked) {
+        const vName = user?.full_name || user?.name || 'User';
+        const plate = opt.text?.split(' ')[0] || 'this truck';
+        warn.style.display = '';
+        warn.innerHTML = `<i class="ti ti-alert-circle" style="margin-right:6px"></i>
+          <strong>${vName}</strong>, please close out on the previous trip for <strong>${plate}</strong>
+          (Waybill: ${sanitise(blocked.waybill_number||'#'+blocked.id)}) — 
+          close the trip details and declare the debit record before you can request diesel for this truck.`;
+        // Disable submit
+        const submitBtn = document.querySelector('[onclick="submitFuelV2()"]');
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.style.opacity = '0.4';
+          submitBtn.title = 'Close the open trip first';
+        }
+      } else {
+        // Re-enable submit
+        const submitBtn = document.querySelector('[onclick="submitFuelV2()"]');
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.style.opacity = ''; submitBtn.title = ''; }
+      }
+    } catch(e) {}
   }
 }
 
