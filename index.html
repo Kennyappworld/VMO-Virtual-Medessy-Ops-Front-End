@@ -6109,6 +6109,14 @@ async function showPetrolStationImprest(vendorId, vendorName) {
 
 async function createPetrolStationImprest(vendorId, vendorName) {
   try {
+    // Check for exact duplicate before creating
+    const existing2 = await api('GET','/api/imprest').catch(()=>[]);
+    const alreadyExists = existing2.find(a =>
+      String(a.vendor_id) === String(vendorId) ||
+      (a.name||'').toLowerCase().includes(vendorName.toLowerCase().slice(0,15))
+    );
+    if (alreadyExists) return; // already exists, don't create another
+
     const r = await api('POST','/api/imprest', {
       name: vendorName + ' — Fuel Float',
       holder_type: 'unit',
@@ -9570,19 +9578,26 @@ async function submitVendor() {
         const vendorsNow = await api('GET','/api/vendors').catch(()=>[]);
         const newV = vendorsNow.find(v => v.company_name===payload.company_name || v.phone===payload.phone);
         if (newV?.id) {
-          await api('POST', '/api/imprest', {
-            name: payload.company_name + ' — Fuel Float',
-            holder_type: 'unit',
-            holder_name: payload.company_name,
-            vendor_id: newV.id,
-            dedicated_category: 'FUEL',
-            bank_name: payload.bank_name||'',
-            account_number: payload.account_number||'',
-            account_name: payload.account_name||'',
-            balance: 0,
-            original_balance: 0,
-            status: 'active',
-          });
+          // Only create if no imprest linked to this vendor yet
+          const allImprests = await api('GET','/api/imprest').catch(()=>[]);
+          const hasLinked = allImprests.find(a =>
+            (a.name||'').toLowerCase().includes((payload.company_name||'').toLowerCase().slice(0,15))
+          );
+          if (!hasLinked) {
+            await api('POST', '/api/imprest', {
+              name: payload.company_name + ' — Fuel Float',
+              holder_type: 'unit',
+              holder_name: payload.company_name,
+              vendor_id: newV.id,
+              dedicated_category: 'FUEL',
+              bank_name: payload.bank_name||'',
+              account_number: payload.account_number||'',
+              account_name: payload.account_name||'',
+              balance: 0,
+              original_balance: 0,
+              status: 'active',
+            });
+          }
         }
         showToast('Petrol station registered + Fuel Float account created in Imprest','success');
       } catch(e2) {
