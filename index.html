@@ -1097,6 +1097,10 @@ const ALL_PAGES = [
   { id:'budget',       icon:'ti-report-money',    label:'Budget & Planning',section:'Finance' },
   { id:'vendor-portal',icon:'ti-building-store',  label:'Vendor Portal',  section:'Admin' },
   { id:'locations',    icon:'ti-map-pin',         label:'Store Locations', section:'Admin' },
+  { id:'my-trips',     icon:'ti-road',            label:'My Trips',        section:'Main' },
+  { id:'my-tasks',     icon:'ti-checklist',       label:'My Tasks',        section:'Main' },
+  { id:'my-trips',     icon:'ti-road',            label:'My Trips',        section:'Operations' },
+  { id:'my-tasks',     icon:'ti-checklist',       label:'My Tasks',        section:'Main' },
 ];
 
 const ROLE_PAGES = {
@@ -1110,7 +1114,7 @@ const ROLE_PAGES = {
   haulage_manager:    ['dashboard','issues','requests','fuel','vehicles','drivers','compliance','companies','trips','inventory','chat','availability','maintenance','meetings','vendors','debit'],
   pool_manager:       ['dashboard','issues','requests','fuel','vehicles','drivers','reservations','compliance','companies','chat','availability','meetings'],
   logistics_supervisor:['dashboard','issues','availability','chat'],
-  driver:             ['dashboard','issues','fuel','reservations','chat'],
+  driver:             ['dashboard','fuel','my-trips','my-tasks','chat','issues','feedback'],
   store_keeper:       ['dashboard','issues','inventory','chat','budget'],
   store_manager:      ['dashboard','issues','inventory','vendors','chat','budget','users','locations'],
   staff:              ['dashboard','issues','requests','fuel','chat','budget'],
@@ -1413,7 +1417,16 @@ async function pgDashboard() {
   const firstName = (user.full_name || user.name || '').split(' ')[0];
 
   // Build the quick-actions list — only include pages this user can access
-  const actions = [
+  // Drivers get a focused, personal action set — not the full operations view
+  const isDriver = user.role === 'driver';
+  const actions = isDriver ? [
+    { page:'fuel',      icon:'ti-gas-station',      bg:'rgba(16,185,129,.15)', color:'var(--green)',  label:'Request Fuel' },
+    { page:'my-trips',  icon:'ti-road',             bg:'rgba(79,142,247,.15)', color:'var(--accent)', label:'My Trips' },
+    { page:'my-tasks',  icon:'ti-checklist',        bg:'rgba(201,168,76,.15)', color:'var(--gold)',   label:'My Tasks' },
+    { page:'reservations',icon:'ti-calendar',       bg:'rgba(139,92,246,.15)', color:'#a78bfa',       label:'Reservations' },
+    { page:'chat',      icon:'ti-message-circle',   bg:'rgba(245,158,11,.15)', color:'var(--amber)',  label:'Team Chat' },
+    { page:'feedback',  icon:'ti-star',             bg:'rgba(236,72,153,.15)', color:'#f472b6',       label:'Feedback' },
+  ].filter(a => allowed.includes(a.page)) : [
     { page:'requests',  icon:'ti-file-plus',       bg:'rgba(245,158,11,.15)',  color:'var(--amber)',  label:'New Payment' },
     { page:'fuel',      icon:'ti-gas-station',      bg:'rgba(16,185,129,.15)', color:'var(--green)',  label:'Fuel Request' },
     { page:'trips',     icon:'ti-route',            bg:'rgba(79,142,247,.15)', color:'var(--accent)', label:'Trip Log' },
@@ -1442,6 +1455,32 @@ async function pgDashboard() {
       <span class="dash-date">${new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</span>
     </div>
 
+    ${isDriver ? `
+    <!-- ── Driver personal command centre ── -->
+    <div id="driver-alerts-widget"></div>
+
+    <div class="stat-grid" style="margin-bottom:4px">
+      <div class="stat-card stat-amber" onclick="navigate('fuel')" style="cursor:pointer" title="View your fuel requests">
+        <div class="stat-label">My Fuel Requests</div>
+        <div class="stat-value">${dash.my_fuel_count || 0}</div>
+        <div class="stat-sub">${dash.my_fuel_pending || 0} awaiting approval</div>
+      </div>
+      <div class="stat-card stat-blue" onclick="navigate('my-trips')" style="cursor:pointer" title="View your trips">
+        <div class="stat-label">My Trips</div>
+        <div class="stat-value">${dash.my_trips_count || 0}</div>
+        <div class="stat-sub">${dash.my_trips_open || 0} active on road</div>
+      </div>
+      <div class="stat-card stat-green" onclick="navigate('my-tasks')" style="cursor:pointer" title="Tasks assigned to you">
+        <div class="stat-label">My Tasks</div>
+        <div class="stat-value">${dash.my_tasks_open || 0}</div>
+        <div class="stat-sub">open items</div>
+      </div>
+      <div class="stat-card stat-purple" onclick="navigate('reservations')" style="cursor:pointer">
+        <div class="stat-label">Reservations</div>
+        <div class="stat-value">${dash.my_reservations || 0}</div>
+        <div class="stat-sub">upcoming</div>
+      </div>
+    </div>` : `
     <div class="stat-grid">
       ${allowed.includes('requests') ? `
       <div class="stat-card stat-amber" onclick="navigate('requests')" style="cursor:pointer">
@@ -1477,7 +1516,7 @@ async function pgDashboard() {
         <div class="stat-value">${dash.drivers || 0}</div>
         <div class="stat-sub">Active</div>
       </div>
-    </div>
+    </div>`}
 
     <div class="section-header"><div class="section-title">Quick Actions</div></div>
     <div class="action-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">
@@ -1495,6 +1534,11 @@ async function pgDashboard() {
     ${['super_admin','admin','real_admin'].includes(user.role) ? `<div id="access-log-widget"></div>` : ''}
     <div id="compliance-widget"></div>
   `);
+
+  // For drivers — load personal alerts in background
+  if (user.role === 'driver') {
+    setTimeout(() => loadDriverAlerts(), 300);
+  }
 
   // Load compliance alerts quietly in the background
   api('GET', '/api/compliance/alerts').then(liveAlerts => {
@@ -2087,14 +2131,17 @@ async function pgFuelAnalytics() {
 async function pgFuel() {
   const activeTab = window._fuelTab || 'requests';
   html('topbar-btn', `
-    <div style="display:flex;gap:6px">
-      <button class="btn btn-ghost btn-sm ${activeTab==='analytics'?'active':''}" onclick="window._fuelTab='analytics';pgFuel()" style="font-size:11px"><i class="ti ti-chart-line"></i> Analytics</button>
-      <button class="topbar-action" onclick="showNewFuel()"><i class="ti ti-plus"></i></button>
+    <div style="display:flex;gap:6px;align-items:center">
+      ${!isDriverRole ? `<button class="btn btn-ghost btn-sm ${activeTab==='analytics'?'active':''}" onclick="window._fuelTab='analytics';pgFuel()" style="font-size:11px"><i class="ti ti-chart-line"></i> Analytics</button>` : ''}
+      <button class="topbar-action" onclick="showNewFuel()" title="New fuel request"><i class="ti ti-plus"></i></button>
     </div>`);
 
   if (activeTab === 'analytics') { await pgFuelAnalytics(); return; }
 
-  const data = await api('GET', '/api/fuel');
+  // Drivers only see their own fuel requests
+  const isDriverRole = user.role === 'driver';
+  // Drivers only ever see their own requests — enforced here and on the backend
+  const data = await api('GET', isDriverRole ? `/api/fuel?driver_user_id=${user.id}` : '/api/fuel');
 
   const totals = {
     all: data.length,
@@ -8162,6 +8209,238 @@ async function resendVendorCredentials(userId) {
     await api('POST', `/api/vendor-users/${userId}/resend`);
     showToast('Credentials resent ✓', 'success');
   } catch(e) { showToast(e.message, 'error'); }
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// DRIVER — PERSONAL PAGES
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── My Trips — driver sees only trips where they are the driver ──────────────
+async function pgMyTrips() {
+  html('topbar-btn', `
+    <button class="topbar-action" onclick="showNewTrip()" title="Log a new trip">
+      <i class="ti ti-plus"></i>
+    </button>`);
+
+  const trips = await api('GET', `/api/trips?driver_user_id=${user.id}`).catch(() => []);
+
+  const open   = trips.filter(t => t.trip_status !== 'closed');
+  const closed = trips.filter(t => t.trip_status === 'closed');
+
+  const statusBadge = s => {
+    const map = {
+      loading:    ['🔴','rgba(239,68,68,.15)','#f87171','Loading'],
+      in_transit: ['🟡','rgba(245,158,11,.15)','var(--amber)','In Transit'],
+      completed:  ['🟢','rgba(34,197,94,.15)','#4ade80','Returned'],
+      closed:     ['✅','rgba(34,197,94,.1)','#4ade80','Closed'],
+    };
+    const [ico, bg, col, lbl] = map[s] || ['⬜','rgba(100,100,100,.1)','var(--text3)','Unknown'];
+    return `<span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:10px;background:${bg};color:${col}">${ico} ${lbl}</span>`;
+  };
+
+  html('page-content', `
+    <!-- ── Summary ── -->
+    <div class="stat-grid" style="margin-bottom:16px">
+      <div class="stat-card stat-blue">
+        <div class="stat-label">Total Trips</div>
+        <div class="stat-value">${trips.length}</div>
+        <div class="stat-sub">all time</div>
+      </div>
+      <div class="stat-card ${open.length ? 'stat-amber' : 'stat-green'}">
+        <div class="stat-label">Active</div>
+        <div class="stat-value">${open.length}</div>
+        <div class="stat-sub">${open.length ? 'on the road' : 'all clear'}</div>
+      </div>
+      <div class="stat-card stat-green">
+        <div class="stat-label">Completed</div>
+        <div class="stat-value">${closed.length}</div>
+        <div class="stat-sub">closed out</div>
+      </div>
+    </div>
+
+    <!-- ── Active trips first ── -->
+    ${open.length ? `
+    <div style="font-size:11px;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+      Active Trips
+    </div>
+    ${open.map(t => driverTripCard(t, statusBadge)).join('')}
+    <div style="height:1px;background:var(--border);margin:14px 0"></div>` : ''}
+
+    <!-- ── Past trips ── -->
+    <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+      ${closed.length ? 'Completed Trips' : 'No trips yet'}
+    </div>
+    ${closed.length ? closed.map(t => driverTripCard(t, statusBadge)).join('') : `
+    <div class="empty-state">
+      <div class="empty-icon"><i class="ti ti-road"></i></div>
+      <div class="empty-title">No trips logged yet</div>
+      <div class="empty-sub">Your trips will appear here once they're recorded by a supervisor</div>
+    </div>`}
+  `);
+}
+
+function driverTripCard(t, statusBadge) {
+  const needsAction = t.trip_status === 'completed' && !t.closing_waybill_docs;
+  return `
+  <div class="card" style="margin-bottom:10px${needsAction ? ';border-left:3px solid var(--amber)' : ''}">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px">
+      <div>
+        <div style="font-weight:700;font-size:14px;color:var(--text)">${sanitise(t.waybill_number || '—')}</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px">
+          ${sanitise(t.loading_site || '—')} → ${sanitise(t.offloading_site || '—')}
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">
+          ${sanitise(t.company_name || '—')} &nbsp;·&nbsp; ${fmtDate(t.trip_date)}
+        </div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        ${statusBadge(t.trip_status || 'loading')}
+        ${t.plate_number ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">${sanitise(t.plate_number)}</div>` : ''}
+      </div>
+    </div>
+
+    <!-- Customer -->
+    ${t.customer_name ? `
+    <div style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--text2);margin-bottom:8px">
+      <i class="ti ti-user" style="color:var(--text3)"></i>
+      ${sanitise(t.customer_name)}
+      ${t.customer_phone ? `&nbsp;·&nbsp; <a href="tel:${sanitise(t.customer_phone)}" style="color:var(--accent)">${sanitise(t.customer_phone)}</a>` : ''}
+    </div>` : ''}
+
+    <!-- Trip metrics -->
+    <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--text3);margin-bottom:8px">
+      ${t.to_km ? `<span><i class="ti ti-road" style="margin-right:3px"></i>${t.to_km} km</span>` : ''}
+      ${t.total_diesel ? `<span><i class="ti ti-gas-station" style="margin-right:3px"></i>${t.total_diesel}L diesel</span>` : ''}
+      ${t.load_description ? `<span><i class="ti ti-package" style="margin-right:3px"></i>${sanitise(t.load_description)}</span>` : ''}
+    </div>
+
+    ${needsAction ? `
+    <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:8px;padding:8px 10px;font-size:11px;color:var(--amber)">
+      <i class="ti ti-alert-triangle"></i>
+      You returned — your supervisor needs to close out this trip. Contact ${sanitise(t.created_by_name || 'your supervisor')}.
+    </div>` : ''}
+  </div>`;
+}
+
+// ── My Tasks — driver sees tasks assigned to them ────────────────────────────
+async function pgMyTasks() {
+  html('topbar-btn', '');
+
+  const tasks = await api('GET', `/api/issues?assigned_to=${user.id}`).catch(() => []);
+
+  // Also pull driver's fuel requests pending approval (these are action items)
+  const fuelPending = await api('GET', `/api/fuel?driver_user_id=${user.id}&status=pending`).catch(() => []);
+
+  // Pull compliance alerts for this driver (licence expiry etc.)
+  const compliance = await api('GET', '/api/compliance/my-alerts').catch(() => []);
+
+  html('page-content', `
+    <!-- ── Alerts section ── -->
+    ${compliance.length ? `
+    <div style="margin-bottom:16px">
+      <div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+        ⚠ Your Alerts
+      </div>
+      ${compliance.map(a => `
+      <div style="background:rgba(239,68,68,.07);border:1.5px solid rgba(239,68,68,.25);border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
+        <i class="ti ti-alert-circle" style="font-size:20px;color:var(--red);flex-shrink:0"></i>
+        <div>
+          <div style="font-weight:700;font-size:13px;color:var(--text)">${sanitise(a.title || a.type)}</div>
+          <div style="font-size:12px;color:var(--text3)">${sanitise(a.message || a.detail || '')}</div>
+          ${a.expires_at ? `<div style="font-size:11px;color:var(--red);margin-top:2px">Expires: ${fmtDate(a.expires_at)}</div>` : ''}
+        </div>
+      </div>`).join('')}
+    </div>` : ''}
+
+    <!-- ── Fuel requests pending approval ── -->
+    ${fuelPending.length ? `
+    <div style="margin-bottom:16px">
+      <div style="font-size:11px;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+        ⛽ Fuel Requests Awaiting Approval (${fuelPending.length})
+      </div>
+      ${fuelPending.map(f => `
+      <div class="card" style="margin-bottom:8px;padding:12px 14px;border-left:3px solid var(--amber)">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-weight:600;font-size:13px">${sanitise(f.ref_number || '#'+f.id)}</div>
+            <div style="font-size:11px;color:var(--text3)">${sanitise(f.fuel_type || 'Fuel')} · ${f.quantity || 0}L · ${sanitise(f.station_name || '—')}</div>
+            <div style="font-size:11px;color:var(--text3)">Submitted ${fmtDate(f.created_at)}</div>
+          </div>
+          <span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:10px;background:rgba(245,158,11,.15);color:var(--amber)">Pending</span>
+        </div>
+      </div>`).join('')}
+    </div>` : ''}
+
+    <!-- ── Assigned tasks ── -->
+    <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+      Assigned Tasks ${tasks.length ? `(${tasks.length})` : ''}
+    </div>
+    ${tasks.length ? tasks.map(task => `
+    <div class="card" style="margin-bottom:8px;padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        <div style="flex:1">
+          <div style="font-weight:700;font-size:13px;color:var(--text)">${sanitise(task.title || task.ref_number || '#'+task.id)}</div>
+          <div style="font-size:12px;color:var(--text3);margin-top:2px">${sanitise(task.description || task.complaint || '')}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:4px">
+            Raised by ${sanitise(task.requester_name || '—')} · ${fmtDate(task.created_at)}
+          </div>
+        </div>
+        <span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:10px;flex-shrink:0;background:${task.status==='resolved'?'rgba(34,197,94,.15)':task.status==='in_progress'?'rgba(79,142,247,.15)':'rgba(245,158,11,.15)'};color:${task.status==='resolved'?'#4ade80':task.status==='in_progress'?'var(--accent)':'var(--amber)'}">
+          ${task.status || 'open'}
+        </span>
+      </div>
+    </div>`).join('') : `
+    <div class="empty-state">
+      <div class="empty-icon"><i class="ti ti-checklist"></i></div>
+      <div class="empty-title">No tasks assigned</div>
+      <div class="empty-sub">Tasks assigned to you by your supervisor will appear here</div>
+    </div>`}
+  `);
+}
+
+// ── Driver compliance alerts endpoint ────────────────────────────────────────
+// Polled on driver dashboard load to show licence/doc expiry warnings
+async function loadDriverAlerts() {
+  if (user.role !== 'driver') return;
+  try {
+    // Check if driver's own licence is expiring
+    const drivers = await api('GET', '/api/drivers').catch(() => []);
+    // Match by email or user id
+    const me = drivers.find(d =>
+      d.email?.toLowerCase() === user.email?.toLowerCase() ||
+      d.user_id === user.id
+    );
+    if (!me) return;
+
+    const alerts = [];
+    if (me.license_expiry) {
+      const days = Math.round((new Date(me.license_expiry) - new Date()) / 86400000);
+      if (days <= 30) {
+        alerts.push({
+          type: 'Licence Expiry',
+          title: 'Driver\'s Licence Expiring',
+          message: days <= 0
+            ? 'Your licence has expired. Please renew immediately.'
+            : `Your licence expires in ${days} day${days !== 1 ? 's' : ''}. Renew before it lapses.`,
+          expires_at: me.license_expiry,
+        });
+      }
+    }
+
+    if (!alerts.length) return;
+
+    const widget = document.getElementById('driver-alerts-widget');
+    if (!widget) return;
+    widget.innerHTML = alerts.map(a => `
+      <div style="background:rgba(239,68,68,.07);border:1.5px solid rgba(239,68,68,.3);border-radius:10px;padding:12px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px">
+        <i class="ti ti-id" style="font-size:22px;color:var(--red);flex-shrink:0"></i>
+        <div>
+          <div style="font-weight:700;font-size:13px;color:var(--text)">${sanitise(a.title)}</div>
+          <div style="font-size:12px;color:var(--text3);margin-top:2px">${sanitise(a.message)}</div>
+        </div>
+      </div>`).join('');
+  } catch {}
 }
 
 
