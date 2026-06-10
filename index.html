@@ -4433,6 +4433,18 @@ async function pgVehicles() {
       <button class="btn btn-ghost btn-sm" onclick="showUploadVehicles()" style="font-size:11px"><i class="ti ti-upload"></i> Import</button>
       <button class="topbar-action" onclick="showNewVehicle()"><i class="ti ti-plus"></i></button>
     </div>`);
+  // Show skeleton immediately
+  html('page-content', `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${[1,2,3,4].map(()=>`
+        <div style="height:72px;background:var(--ink2);border-radius:var(--r-md);border:1px solid var(--b2);opacity:.5;animation:pulse 1.4s ease-in-out infinite"></div>
+      `).join('')}
+    </div>
+    <div style="text-align:center;padding:16px;font-size:12px;color:var(--text3)">
+      <span class="spinner" style="margin-right:6px"></span> Loading Vehicles…
+    </div>`);
+
+
 
   const data = await api('GET', '/api/vehicles');
   window._vehiclesData = data;
@@ -4881,6 +4893,18 @@ async function pgDrivers() {
       <button class="topbar-action" onclick="showNewDriver()"><i class="ti ti-plus"></i></button>
     </div>
   `);
+  // Show skeleton immediately
+  html('page-content', `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${[1,2,3,4].map(()=>`
+        <div style="height:72px;background:var(--ink2);border-radius:var(--r-md);border:1px solid var(--b2);opacity:.5;animation:pulse 1.4s ease-in-out infinite"></div>
+      `).join('')}
+    </div>
+    <div style="text-align:center;padding:16px;font-size:12px;color:var(--text3)">
+      <span class="spinner" style="margin-right:6px"></span> Loading Drivers…
+    </div>`);
+
+
   const data = await api('GET', '/api/drivers');
   html('page-content', `
     <div style="overflow-x:auto">
@@ -5547,6 +5571,18 @@ async function pgImprest() {
       ${isAccounts ? `<button class="btn btn-ghost btn-sm" onclick="showImprestStats()"><i class="ti ti-chart-bar"></i></button>` : ''}
       <button class="topbar-action" onclick="showNewImprest()"><i class="ti ti-plus"></i></button>
     </div>`);
+  // Show skeleton immediately
+  html('page-content', `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${[1,2,3,4].map(()=>`
+        <div style="height:72px;background:var(--ink2);border-radius:var(--r-md);border:1px solid var(--b2);opacity:.5;animation:pulse 1.4s ease-in-out infinite"></div>
+      `).join('')}
+    </div>
+    <div style="text-align:center;padding:16px;font-size:12px;color:var(--text3)">
+      <span class="spinner" style="margin-right:6px"></span> Loading Imprest Accounts…
+    </div>`);
+
+
 
   const [accounts, retirements, vendors] = await Promise.all([
     api('GET', '/api/imprest'),
@@ -8362,107 +8398,74 @@ async function pgMyTrips() {
       <i class="ti ti-plus"></i>
     </button>`);
 
-  const trips = await api('GET', `/api/trips?driver_user_id=${user.id}`).catch(() => []);
+  // Show skeleton immediately — don't make driver stare at a blank screen
+  html('page-content', `
+    <div class="stat-grid" style="margin-bottom:16px">
+      ${[1,2,3].map(()=>`<div class="stat-card" style="min-height:72px;opacity:.4;animation:pulse 1.5s infinite"></div>`).join('')}
+    </div>
+    <div style="padding:24px;text-align:center;color:var(--text3)">
+      <span class="spinner" style="margin-right:8px"></span> Loading your trips…
+    </div>`);
+
+  // Fetch with a 10s timeout
+  const trips = await Promise.race([
+    api('GET', `/api/trips?driver_user_id=${user.id}`).catch(() => []),
+    new Promise(r => setTimeout(() => r([]), 10000)),
+  ]);
 
   const open   = trips.filter(t => t.trip_status !== 'closed');
   const closed = trips.filter(t => t.trip_status === 'closed');
 
   const statusBadge = s => {
     const map = {
-      loading:    ['🔴','rgba(239,68,68,.15)','#f87171','Loading'],
-      in_transit: ['🟡','rgba(245,158,11,.15)','var(--amber)','In Transit'],
-      completed:  ['🟢','rgba(34,197,94,.15)','#4ade80','Returned'],
-      closed:     ['✅','rgba(34,197,94,.1)','#4ade80','Closed'],
+      loading:    ['🔴', 'rgba(239,68,68,.15)',  '#f87171',        'Loading'],
+      in_transit: ['🟡', 'rgba(245,158,11,.15)', 'var(--amber)',   'In Transit'],
+      completed:  ['🟢', 'rgba(34,197,94,.15)',  '#4ade80',        'Returned'],
+      closed:     ['✅', 'rgba(34,197,94,.1)',   '#4ade80',        'Closed'],
     };
     const [ico, bg, col, lbl] = map[s] || ['⬜','rgba(100,100,100,.1)','var(--text3)','Unknown'];
     return `<span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:10px;background:${bg};color:${col}">${ico} ${lbl}</span>`;
   };
 
   html('page-content', `
-    <!-- ── Summary ── -->
     <div class="stat-grid" style="margin-bottom:16px">
-      <div class="stat-card stat-blue">
+      <div class="stat-card stat-blue" style="cursor:pointer">
         <div class="stat-label">Total Trips</div>
         <div class="stat-value">${trips.length}</div>
         <div class="stat-sub">all time</div>
       </div>
-      <div class="stat-card ${open.length ? 'stat-amber' : 'stat-green'}">
-        <div class="stat-label">Active</div>
+      <div class="stat-card ${open.length ? 'stat-amber' : 'stat-green'}" style="cursor:pointer">
+        <div class="stat-label">On the Road</div>
         <div class="stat-value">${open.length}</div>
-        <div class="stat-sub">${open.length ? 'on the road' : 'all clear'}</div>
+        <div class="stat-sub">${open.length ? 'active' : 'none active'}</div>
       </div>
-      <div class="stat-card stat-green">
+      <div class="stat-card stat-green" style="cursor:pointer">
         <div class="stat-label">Completed</div>
         <div class="stat-value">${closed.length}</div>
         <div class="stat-sub">closed out</div>
       </div>
     </div>
 
-    <!-- ── Active trips first ── -->
     ${open.length ? `
     <div style="font-size:11px;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
-      Active Trips
+      🟡 Active — On the Road (${open.length})
     </div>
     ${open.map(t => driverTripCard(t, statusBadge)).join('')}
-    <div style="height:1px;background:var(--border);margin:14px 0"></div>` : ''}
+    <div style="height:1px;background:var(--border);margin:16px 0"></div>` : ''}
 
-    <!-- ── Past trips ── -->
     <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
-      ${closed.length ? 'Completed Trips' : 'No trips yet'}
+      ${closed.length ? `✅ Completed Trips (${closed.length})` : trips.length ? '' : 'No trips yet'}
     </div>
     ${closed.length ? closed.map(t => driverTripCard(t, statusBadge)).join('') : `
     <div class="empty-state">
       <div class="empty-icon"><i class="ti ti-road"></i></div>
-      <div class="empty-title">No trips logged yet</div>
-      <div class="empty-sub">Your trips will appear here once they're recorded by a supervisor</div>
+      <div class="empty-title">No trips recorded yet</div>
+      <div class="empty-sub">Your trips are logged by supervisors and will appear here</div>
     </div>`}
   `);
 }
 
-function driverTripCard(t, statusBadge) {
-  const needsAction = t.trip_status === 'completed' && !t.closing_waybill_docs;
-  return `
-  <div class="card" style="margin-bottom:10px${needsAction ? ';border-left:3px solid var(--amber)' : ''}">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px">
-      <div>
-        <div style="font-weight:700;font-size:14px;color:var(--text)">${sanitise(t.waybill_number || '—')}</div>
-        <div style="font-size:12px;color:var(--text3);margin-top:2px">
-          ${sanitise(t.loading_site || '—')} → ${sanitise(t.offloading_site || '—')}
-        </div>
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">
-          ${sanitise(t.company_name || '—')} &nbsp;·&nbsp; ${fmtDate(t.trip_date)}
-        </div>
-      </div>
-      <div style="text-align:right;flex-shrink:0">
-        ${statusBadge(t.trip_status || 'loading')}
-        ${t.plate_number ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">${sanitise(t.plate_number)}</div>` : ''}
-      </div>
-    </div>
 
-    <!-- Customer -->
-    ${t.customer_name ? `
-    <div style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--text2);margin-bottom:8px">
-      <i class="ti ti-user" style="color:var(--text3)"></i>
-      ${sanitise(t.customer_name)}
-      ${t.customer_phone ? `&nbsp;·&nbsp; <a href="tel:${sanitise(t.customer_phone)}" style="color:var(--accent)">${sanitise(t.customer_phone)}</a>` : ''}
-    </div>` : ''}
-
-    <!-- Trip metrics -->
-    <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--text3);margin-bottom:8px">
-      ${t.to_km ? `<span><i class="ti ti-road" style="margin-right:3px"></i>${t.to_km} km</span>` : ''}
-      ${t.total_diesel ? `<span><i class="ti ti-gas-station" style="margin-right:3px"></i>${t.total_diesel}L diesel</span>` : ''}
-      ${t.load_description ? `<span><i class="ti ti-package" style="margin-right:3px"></i>${sanitise(t.load_description)}</span>` : ''}
-    </div>
-
-    ${needsAction ? `
-    <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:8px;padding:8px 10px;font-size:11px;color:var(--amber)">
-      <i class="ti ti-alert-triangle"></i>
-      You returned — your supervisor needs to close out this trip. Contact ${sanitise(t.created_by_name || 'your supervisor')}.
-    </div>` : ''}
-  </div>`;
-}
-
-// ── My Tasks — driver sees tasks assigned to them ────────────────────────────
 async function pgMyTasks() {
   html('topbar-btn', '');
 
@@ -8908,6 +8911,18 @@ async function pgCompanies() {
       <button class="topbar-action" title="Import companies" onclick="showImportCompanies()"><i class="ti ti-upload"></i></button>
     </div>
   `);
+  // Show skeleton immediately
+  html('page-content', `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${[1,2,3,4].map(()=>`
+        <div style="height:72px;background:var(--ink2);border-radius:var(--r-md);border:1px solid var(--b2);opacity:.5;animation:pulse 1.4s ease-in-out infinite"></div>
+      `).join('')}
+    </div>
+    <div style="text-align:center;padding:16px;font-size:12px;color:var(--text3)">
+      <span class="spinner" style="margin-right:6px"></span> Loading Companies…
+    </div>`);
+
+
 
   const [companies, vehicles, drivers] = await Promise.all([
     api('GET', '/api/companies'),
@@ -9185,6 +9200,18 @@ async function pgTrips() {
       <button class="topbar-action" onclick="showNewTrip()" title="Log new trip"><i class="ti ti-plus"></i></button>
     </div>
   `);
+  // Show skeleton immediately
+  html('page-content', `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${[1,2,3,4].map(()=>`
+        <div style="height:72px;background:var(--ink2);border-radius:var(--r-md);border:1px solid var(--b2);opacity:.5;animation:pulse 1.4s ease-in-out infinite"></div>
+      `).join('')}
+    </div>
+    <div style="text-align:center;padding:16px;font-size:12px;color:var(--text3)">
+      <span class="spinner" style="margin-right:6px"></span> Loading Trip Log…
+    </div>`);
+
+
 
   // Company selector
   html('page-content', `
@@ -9370,6 +9397,18 @@ async function pgVendors() {
   html('topbar-btn', `
     <button class="topbar-action" onclick="showNewVendor()" title="Register vendor"><i class="ti ti-plus"></i></button>
   `);
+  // Show skeleton immediately
+  html('page-content', `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${[1,2,3,4].map(()=>`
+        <div style="height:72px;background:var(--ink2);border-radius:var(--r-md);border:1px solid var(--b2);opacity:.5;animation:pulse 1.4s ease-in-out infinite"></div>
+      `).join('')}
+    </div>
+    <div style="text-align:center;padding:16px;font-size:12px;color:var(--text3)">
+      <span class="spinner" style="margin-right:6px"></span> Loading Vendors…
+    </div>`);
+
+
   const vendors = await api('GET','/api/vendors').catch(()=>[]);
   window._vendorsList = vendors;
 
