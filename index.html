@@ -3578,13 +3578,53 @@ async function autoFillFuelFromVehicle() {
   const vtype = opt.dataset.vtype || '';
   const vehicleId = opt.value;
 
-  if (ft && el('nf-type')) {
-    const typeSelect = el('nf-type');
-    for (let i=0;i<typeSelect.options.length;i++) {
-      if (typeSelect.options[i].value.toLowerCase()===ft.toLowerCase()) {
-        typeSelect.selectedIndex=i; break;
+  // ── Enforce fuel type — petrol cars can only take petrol, diesel trucks diesel ──
+  const warn = el('nf-vehicle-warning');
+  const fuelTypeSelect = el('nf-type');
+  if (ft && fuelTypeSelect) {
+    // Lock the fuel type dropdown to the vehicle's fuel type
+    const normalised = ft.toLowerCase();
+    for (let i = 0; i < fuelTypeSelect.options.length; i++) {
+      const optVal = fuelTypeSelect.options[i].value.toLowerCase();
+      if (optVal === normalised || optVal.includes(normalised) || normalised.includes(optVal)) {
+        fuelTypeSelect.selectedIndex = i;
+        break;
       }
     }
+
+    // Disable wrong-type options and show a clear notice
+    let lockedMsg = '';
+    for (let i = 0; i < fuelTypeSelect.options.length; i++) {
+      const optVal = fuelTypeSelect.options[i].value.toLowerCase();
+      const isMatch = optVal === normalised || optVal.includes(normalised) || normalised.includes(optVal);
+      fuelTypeSelect.options[i].disabled = !isMatch;
+    }
+
+    // Show notice if vehicle fuel type is known
+    if (ft) {
+      const vehicleName = opt.text?.trim() || 'This vehicle';
+      const fuelLabel = ft === 'Diesel' ? '🛢 Diesel only'
+        : ft === 'Petrol' ? '⛽ Petrol only'
+        : ft === 'CNG'    ? '🔵 CNG only'
+        : ft === 'LNG'    ? '🟣 LNG only'
+        : ft;
+      if (warn) {
+        // Show type lock notice (not an error, just informational)
+        const existingBlock = warn.dataset.tripBlock === '1';
+        if (!existingBlock) {
+          warn.style.display = '';
+          warn.style.background = 'rgba(79,142,247,.08)';
+          warn.style.borderColor = 'rgba(79,142,247,.25)';
+          warn.style.color = 'var(--accent)';
+          warn.innerHTML = `<i class="ti ti-info-circle" style="margin-right:6px"></i>
+            <strong>${sanitise(vehicleName)}</strong> runs on <strong>${sanitise(ft)}</strong>.
+            Only ${fuelLabel} requests are allowed for this vehicle.`;
+        }
+      }
+    }
+  } else if (warn && !ft) {
+    // No fuel type on vehicle — clear notice
+    if (warn.dataset.tripBlock !== '1') warn.style.display = 'none';
   }
 
   // For haulage trucks: check for open unclosed trip (debit not declared)
@@ -3606,6 +3646,10 @@ async function autoFillFuelFromVehicle() {
         const vName = user?.full_name || user?.name || 'User';
         const plate = opt.text?.split(' ')[0] || 'this truck';
         warn.style.display = '';
+        warn.dataset.tripBlock = '1';
+        warn.style.background = '';
+        warn.style.borderColor = '';
+        warn.style.color = '';
         warn.innerHTML = `<i class="ti ti-alert-circle" style="margin-right:6px"></i>
           <strong>${vName}</strong>, please close out on the previous trip for <strong>${plate}</strong>
           (Waybill: ${sanitise(blocked.waybill_number||'#'+blocked.id)}) — 
@@ -3618,7 +3662,8 @@ async function autoFillFuelFromVehicle() {
           submitBtn.title = 'Close the open trip first';
         }
       } else {
-        // Re-enable submit
+        // Re-enable submit — clear trip block flag
+        if (warn) warn.dataset.tripBlock = '0';
         const submitBtn = document.querySelector('[onclick="submitFuelV2()"]');
         if (submitBtn) { submitBtn.disabled = false; submitBtn.style.opacity = ''; submitBtn.title = ''; }
       }
@@ -6132,41 +6177,135 @@ async function showPetrolImprestDetail(account, vendorName) {
 
 async function topUpPetrolImprest(accountId, vendorName) {
   closeModal();
+  // Load current rates from vendor if available
+  const vendors = await api('GET', '/api/vendors').catch(() => []);
+  const acc = await api('GET', '/api/imprest').catch(() => []);
+  const account = acc.find(a => a.id === accountId) || {};
+  const vendor = vendors.find(v => v.id == account.linked_vendor_id) || {};
+
   setTimeout(() => {
-    showModal('Top Up — ' + vendorName, `
+    showModal('Top Up — ' + sanitise(vendorName), `
       <div class="form-row">
-        <div class="form-group"><label class="form-label">Amount (₦) *</label>
-          <input class="form-input" id="tu-amount" type="number" placeholder="e.g. 500000"></div>
-        <div class="form-group"><label class="form-label">Funding Date</label>
-          <input class="form-input" type="date" id="tu-date" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="form-group">
+          <label class="form-label">Amount (₦) *</label>
+          <input class="form-input" id="tu-amount" type="number" placeholder="e.g. 500000"
+                 oninput="calcTopUpLitres()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Funding Date</label>
+          <input class="form-input" type="date" id="tu-date"
+                 value="${new Date().toISOString().slice(0,10)}">
+        </div>
       </div>
-      <div class="form-group"><label class="form-label">Current Diesel/Petrol Rate (₦/L)</label>
-        <input class="form-input" id="tu-rate" type="number" placeholder="e.g. 1700"></div>
-      <div class="form-group"><label class="form-label">Notes</label>
-        <input class="form-input" id="tu-notes" placeholder="e.g. June funding — AP Station"></div>
+
+      <!-- Separate diesel and petrol rates -->
+      <div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.18);border-radius:10px;padding:12px;margin-bottom:12px">
+        <div style="font-size:10px;font-weight:700;color:var(--gold);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">
+          Current Fuel Rates (₦/Litre)
+        </div>
+        <div class="form-row" style="margin-bottom:0">
+          <div class="form-group">
+            <label class="form-label" style="display:flex;align-items:center;gap:5px">
+              <span style="font-size:14px">🛢</span> Diesel Rate (₦/L) *
+            </label>
+            <input class="form-input" id="tu-diesel-rate" type="number"
+                   placeholder="e.g. 1700"
+                   value="${vendor.diesel_price || vendor.price_per_litre || ''}"
+                   oninput="calcTopUpLitres()">
+            <div style="font-size:10px;color:var(--text3);margin-top:3px">
+              For diesel/haulage trucks — set separately from petrol
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" style="display:flex;align-items:center;gap:5px">
+              <span style="font-size:14px">⛽</span> Petrol Rate (₦/L)
+            </label>
+            <input class="form-input" id="tu-petrol-rate" type="number"
+                   placeholder="e.g. 950"
+                   value="${vendor.petrol_price || ''}"
+                   oninput="calcTopUpLitres()">
+            <div style="font-size:10px;color:var(--text3);margin-top:3px">
+              For petrol/pool cars — can differ from diesel rate
+            </div>
+          </div>
+        </div>
+        <!-- Estimated litres -->
+        <div id="tu-litres-preview" style="font-size:11px;color:var(--text3);margin-top:6px;padding:6px 8px;background:var(--ink3);border-radius:6px;display:none">
+          Estimated capacity: <strong id="tu-litres-diesel" style="color:var(--gold)">—</strong> diesel litres
+          &nbsp;/&nbsp; <strong id="tu-litres-petrol" style="color:var(--amber)">—</strong> petrol litres
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Notes / Reference</label>
+        <input class="form-input" id="tu-notes"
+               placeholder="e.g. June top-up — AP Station, Budget ref: OPS-2026-06">
+      </div>
+
       <div style="display:flex;gap:8px;margin-top:12px">
-        <button class="btn btn-primary btn-block" onclick="submitTopUp(${accountId})">Fund Account</button>
+        <button class="btn btn-primary btn-block" onclick="submitTopUp(${accountId})">
+          <i class="ti ti-wallet"></i> Fund Account
+        </button>
         <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       </div>
     `);
   }, 200);
 }
 
-async function submitTopUp(accountId) {
-  const amount = parseFloat(el('tu-amount')?.value || 0);
-  const rate = parseFloat(el('tu-rate')?.value || 0);
-  const notes = el('tu-notes')?.value || '';
-  const date = el('tu-date')?.value;
-  if (!amount) { alert('Enter amount'); return; }
-  try {
-    await api('POST', `/api/imprest/${accountId}/fund`, { amount, rate, notes, fund_date: date });
-    if (rate) await api('PATCH', `/api/imprest/${accountId}`, { current_rate: rate });
-    closeModal();
-    showToast('Account funded successfully', 'success');
-    clearCache();
-    navigate('imprest');
-  } catch(e) { alert(e.message||'Failed to fund'); }
+function calcTopUpLitres() {
+  const amt = parseFloat(el('tu-amount')?.value) || 0;
+  const dr  = parseFloat(el('tu-diesel-rate')?.value) || 0;
+  const pr  = parseFloat(el('tu-petrol-rate')?.value) || 0;
+  const preview = el('tu-litres-preview');
+  if (!preview) return;
+  if (amt > 0 && (dr > 0 || pr > 0)) {
+    preview.style.display = 'block';
+    const dLitres = el('tu-litres-diesel');
+    const pLitres = el('tu-litres-petrol');
+    if (dLitres) dLitres.textContent = dr > 0 ? Math.floor(amt / dr).toLocaleString() + 'L' : '—';
+    if (pLitres) pLitres.textContent = pr > 0 ? Math.floor(amt / pr).toLocaleString() + 'L' : '—';
+  } else {
+    preview.style.display = 'none';
+  }
 }
+
+async function submitTopUp(accountId) {
+  const amount = parseFloat(el('tu-amount')?.value);
+  const dieselRate = parseFloat(el('tu-diesel-rate')?.value) || null;
+  const petrolRate = parseFloat(el('tu-petrol-rate')?.value) || null;
+
+  if (!amount || amount <= 0) {
+    showToast('Enter a valid funding amount', 'error');
+    el('tu-amount')?.focus();
+    return;
+  }
+  if (!dieselRate && !petrolRate) {
+    showToast('Enter at least one fuel rate (diesel or petrol)', 'error');
+    return;
+  }
+
+  try {
+    clearCache();
+    await api('POST', `/api/imprest/${accountId}/fund`, {
+      amount,
+      diesel_rate:  dieselRate,
+      petrol_rate:  petrolRate,
+      funding_date: el('tu-date')?.value || new Date().toISOString().slice(0,10),
+      notes:        el('tu-notes')?.value?.trim() || '',
+      funded_by:    user.full_name || user.name,
+    });
+    // Also update the vendor's rates for future reference
+    if (dieselRate || petrolRate) {
+      // rates saved in funding record — vendor can update their own price separately
+    }
+    closeModal();
+    showToast('Account funded ✓', 'success');
+    pgImprest();
+  } catch(e) {
+    showToast(e.message || 'Could not process funding', 'error');
+  }
+}
+
 
 async function editPetrolRate(accountId, currentRate) {
   const newRate = prompt('Enter new diesel/petrol rate (₦/L):', currentRate);
