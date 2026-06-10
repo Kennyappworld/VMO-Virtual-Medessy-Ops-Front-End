@@ -8292,6 +8292,7 @@ async function checkVehicleOpenTrip(vehicleId, vehiclePlate) {
 }
 
 async function showNewTrip() {
+  const companies = window._tripCompanies || await apiasync function showNewTrip() {
   const companies = window._tripCompanies || await api('GET','/api/companies').catch(()=>[]);
   const firstCo = companies[0];
   let coVehicles = [], coDrivers = [];
@@ -8748,7 +8749,8 @@ async function downloadWaybillReport() {
   showToast(`${trips.length} trip(s) exported`,'success');
 }
 
-('GET','/api/companies').catch(()=>[]);
+async function showNewTrip() {
+  const companies = window._tripCompanies || await api('GET','/api/companies').catch(()=>[]);
   const firstCo = companies[0];
   let coVehicles = [], coDrivers = [];
   if (firstCo) {
