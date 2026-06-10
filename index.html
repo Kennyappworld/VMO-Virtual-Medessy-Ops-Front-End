@@ -8628,7 +8628,7 @@ async function pgBudget() {
     'operations_manager','haulage_ops_manager','pool_ops_manager'].includes(user.role);
 
   html('topbar-btn', canCreate
-    ? `<button class="topbar-action" onclick="showNewBudget()"><i class="ti ti-plus"></i></button>`
+    ? `<button class="topbar-action" onclick="showNewBudgetItem()"><i class="ti ti-plus"></i></button>`
     : '');
 
   const [myBudgets, allBudgets] = await Promise.all([
@@ -8707,79 +8707,7 @@ async function pgBudget() {
   `);
 }
 
-function showNewBudget() {
-  const canCreate = ['real_admin','super_admin','admin','accounts','hr','compliance',
-    'operations_manager','haulage_ops_manager','pool_ops_manager'].includes(user.role);
-  if (!canCreate) { alert('Budget creation is for department heads and above.'); return; }
-  showModal('Create Budget', `
-    <div class="form-group"><label class="form-label">Budget Title</label>
-      <input class="form-input" id="nb-title" placeholder="e.g. Operations Q1 2026, My March Budget"></div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Start Date</label>
-        <input class="form-input" type="date" id="nb-start" value="${new Date().toISOString().slice(0,10)}"></div>
-      <div class="form-group"><label class="form-label">End Date</label>
-        <input class="form-input" type="date" id="nb-end"></div>
-    </div>
-    <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;margin:12px 0 8px">Budget Line Items</div>
-    <div id="budget-lines">
-      ${['FUEL','MAINTENANCE','ACCOMMODATION','DISPATCH','DRIVER ALLOWANCE','OTHER OVH'].map(cat => `
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
-          <div style="flex:1;font-size:13px;color:var(--text2)">${cat}</div>
-          <input type="number" placeholder="0" data-cat="${cat}" class="form-input budget-line" style="width:130px;padding:7px 10px">
-        </div>`).join('')}
-    </div>
-    <div style="background:var(--bg3);border-radius:8px;padding:10px;margin:8px 0;display:flex;justify-content:space-between;font-size:13px">
-      <span style="color:var(--text2)">Total Budget</span>
-      <strong id="nb-total">₦0</strong>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:4px">
-      <button class="btn btn-primary btn-block" onclick="submitBudget()">Save Budget</button>
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-    </div>`);
-
-  // Live total
-  document.querySelectorAll('.budget-line').forEach(input => {
-    input.addEventListener('input', () => {
-      const total = Array.from(document.querySelectorAll('.budget-line')).reduce((s, i) => s + (+i.value || 0), 0);
-      const nb = el('nb-total');
-      if (nb) nb.textContent = fmt(total);
-    });
-  });
-}
-
-async function submitBudget() {
-  const title = el('nb-title')?.value?.trim();
-  const start = el('nb-start')?.value;
-  const end = el('nb-end')?.value;
-  if (!title) { alert('Enter a budget title'); return; }
-  if (!start || !end) { alert('Select start and end dates'); return; }
-
-  const lineItems = Array.from(document.querySelectorAll('.budget-line'))
-    .filter(i => +i.value > 0)
-    .map(i => ({ category: i.dataset.cat, amount: +i.value }));
-
-  if (!lineItems.length) { alert('Enter at least one budget amount'); return; }
-
-  const total = lineItems.reduce((s, li) => s + li.amount, 0);
-
-  try {
-    await api('POST', '/api/budgets', {
-      title,
-      start_date: start,
-      end_date: end,
-      total_budgeted: total,
-      line_items: JSON.stringify(lineItems),
-    });
-    delete cache['GET/api/budgets/my'];
-    delete cache['GET/api/budgets/all'];
-    closeModal();
-    await pgBudget();
-  } catch(e) { alert(e.message); }
-}
-
-
-// ── ACCESS LOG ───────────────────────────────────────────────────────────────
-// Real Admin sees ALL visitor details including purpose and IP
+async 
 async function showFullAccessLog() {
   showModal('Visitor Access Log', `<div class="loading-state" style="padding:30px"><div class="spinner"></div></div>`);
   try {
