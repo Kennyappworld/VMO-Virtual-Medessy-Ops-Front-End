@@ -7295,26 +7295,42 @@ ${tableEl.outerHTML}
 }
 async function pgBudget() {
   const isAdmin = ['real_admin','super_admin','admin'].includes(user.role);
-  const isHOD   = ['real_admin','super_admin','admin','hr','accounts','haulage_manager','operations_manager','compliance'].includes(user.role);
-  const dept    = user.department || user.role?.replace(/_/g,' ') || 'General';
+  const isHOD   = ['real_admin','super_admin','admin','hr','accounts',
+                    'haulage_manager','operations_manager','compliance'].includes(user.role);
 
   html('topbar-btn', `
-    <div style="display:flex;gap:6px;align-items:center">
-      ${isAdmin ? `<button class="btn btn-ghost btn-sm" onclick="showSetBudgetPeriod()"><i class="ti ti-calendar-event"></i> Set Period</button>` : ''}
-      <button class="topbar-action" onclick="showNewBudgetItem()"><i class="ti ti-plus"></i></button>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      ${isAdmin ? `
+        <button class="btn btn-ghost btn-sm" onclick="showManageBudgetCategories()">
+          <i class="ti ti-tag"></i> Categories
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="showSetBudgetPeriod()">
+          <i class="ti ti-calendar-event"></i> Period
+        </button>` : ''}
+      <button class="topbar-action" onclick="showNewBudgetItem()" title="Add budget item">
+        <i class="ti ti-plus"></i>
+      </button>
     </div>`);
 
-  const [items, settings] = await Promise.all([
+  const [items, settings, categories] = await Promise.all([
     api('GET', '/api/budget/items').catch(() => []),
     api('GET', '/api/budget/settings').catch(() => ({})),
+    api('GET', '/api/budget/categories').catch(() => []),
   ]);
 
+  // Store categories globally for use in modals
+  window._budgetCategories = categories.length ? categories : [
+    'Fuel','Maintenance','Accommodation','Dispatch','Driver Allowance',
+    'Other Overhead','Salaries','Logistics','Admin','Operations',
+    'Compliance','IT & Technology','Marketing','Training','Miscellaneous'
+  ];
+
   const totalBudget = items.reduce((s, i) => s + (+i.amount || 0), 0);
-  const totalSpent  = items.reduce((s, i) => s + (+i.spent || 0), 0);
+  const totalSpent  = items.reduce((s, i) => s + (+i.spent  || 0), 0);
   const totalLeft   = totalBudget - totalSpent;
   const pctUsed     = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
 
-  // Group by department
+  // Group items by department
   const byDept = {};
   items.forEach(item => {
     const d = item.department || 'General';
@@ -7323,76 +7339,94 @@ async function pgBudget() {
   });
 
   const periodLabel = settings.period_label || 'Current Period';
-  const periodFrom  = settings.period_from  ? fmtDate(settings.period_from) : '—';
-  const periodTo    = settings.period_to    ? fmtDate(settings.period_to)   : '—';
+  const periodFrom  = settings.period_from ? fmtDate(settings.period_from) : '—';
+  const periodTo    = settings.period_to   ? fmtDate(settings.period_to)   : '—';
 
   html('page-content', `
-    <!-- ── Banner ── -->
+    <!-- ── Budget summary banner ── -->
     <div style="background:linear-gradient(135deg,rgba(16,185,129,.1),rgba(79,142,247,.07));border:1px solid rgba(16,185,129,.2);border-radius:var(--r-md);padding:18px;margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
         <div>
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--t3)">
-            ${sanitise(periodLabel)} · ${periodFrom} — ${periodTo}
+            ${sanitise(periodLabel)} &nbsp;·&nbsp; ${periodFrom} — ${periodTo}
           </div>
           <div style="font-size:32px;font-weight:900;color:var(--text);line-height:1.1">${fmt(totalBudget)}</div>
-          <div style="font-size:12px;color:var(--text3)">Total approved budget</div>
+          <div style="font-size:12px;color:var(--text3)">Total approved budget · ${items.length} item${items.length !== 1 ? 's' : ''}</div>
         </div>
-        <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div style="display:flex;gap:20px;flex-wrap:wrap">
           <div style="text-align:right">
             <div style="font-size:11px;color:var(--text3)">Spent</div>
-            <div style="font-size:20px;font-weight:800;color:var(--red)">${fmt(totalSpent)}</div>
+            <div style="font-size:22px;font-weight:800;color:var(--red)">${fmt(totalSpent)}</div>
           </div>
           <div style="text-align:right">
             <div style="font-size:11px;color:var(--text3)">Remaining</div>
-            <div style="font-size:20px;font-weight:800;color:var(--green)">${fmt(totalLeft)}</div>
+            <div style="font-size:22px;font-weight:800;color:var(--green)">${fmt(totalLeft)}</div>
           </div>
         </div>
       </div>
-      <!-- Usage bar -->
       <div style="margin-top:12px">
         <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);margin-bottom:4px">
-          <span>Budget used</span><span>${pctUsed}%</span>
+          <span>Budget utilisation</span><span>${pctUsed}%</span>
         </div>
         <div style="height:8px;background:var(--ink3);border-radius:4px;overflow:hidden">
-          <div style="height:100%;width:${Math.min(pctUsed,100)}%;background:${pctUsed>90?'var(--red)':pctUsed>70?'var(--amber)':'var(--green)'};border-radius:4px;transition:width .4s"></div>
+          <div style="height:100%;width:${Math.min(pctUsed,100)}%;border-radius:4px;transition:width .4s;background:${pctUsed > 90 ? 'var(--red)' : pctUsed > 70 ? 'var(--amber)' : 'var(--green)'}"></div>
         </div>
       </div>
     </div>
 
-    <!-- ── Department sections ── -->
+    <!-- ── Dept sections ── -->
     ${Object.keys(byDept).length ? Object.entries(byDept).map(([deptName, deptItems]) => {
-      const deptTotal = deptItems.reduce((s,i) => s+(+i.amount||0), 0);
-      const deptSpent = deptItems.reduce((s,i) => s+(+i.spent||0), 0);
-      const canRequest = isHOD && (user.department === deptName || isAdmin);
+      const deptTotal = deptItems.reduce((s, i) => s + (+i.amount || 0), 0);
+      const deptSpent = deptItems.reduce((s, i) => s + (+i.spent  || 0), 0);
       return `
-      <div style="margin-bottom:16px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div style="margin-bottom:18px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)">
           <div style="font-weight:700;font-size:13px;color:var(--text)">${sanitise(deptName)}</div>
-          <div style="font-size:12px;color:var(--text3)">${fmt(deptSpent)} of ${fmt(deptTotal)}</div>
+          <div style="font-size:12px;color:var(--text3)">${fmt(deptSpent)} spent of ${fmt(deptTotal)}</div>
         </div>
         ${deptItems.map(item => {
-          const pct = item.amount > 0 ? Math.round((item.spent||0)/item.amount*100) : 0;
+          const pct      = item.amount > 0 ? Math.round((+item.spent || 0) / +item.amount * 100) : 0;
           const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--amber)' : 'var(--accent)';
+          const canAct   = isHOD && (isAdmin || user.department === deptName);
           return `
           <div class="card" style="margin-bottom:8px;padding:12px 14px">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-              <div style="flex:1">
-                <div style="font-weight:600;font-size:13px">${sanitise(item.title)}</div>
-                <div style="font-size:11px;color:var(--text3);margin-top:2px">${sanitise(item.description || '')}</div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                  <span style="font-weight:700;font-size:13px">${sanitise(item.title)}</span>
+                  ${item.category ? `<span style="font-size:10px;padding:2px 7px;border-radius:10px;background:rgba(79,142,247,.12);color:var(--accent)">${sanitise(item.category)}</span>` : ''}
+                </div>
+                ${item.description ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${sanitise(item.description)}</div>` : ''}
                 <div style="height:5px;background:var(--ink3);border-radius:3px;margin-top:8px;overflow:hidden">
                   <div style="height:100%;width:${Math.min(pct,100)}%;background:${barColor};border-radius:3px"></div>
                 </div>
-                <div style="font-size:10px;color:var(--text3);margin-top:3px">${pct}% used · ${fmt(item.amount - (item.spent||0))} remaining</div>
+                <div style="font-size:10px;color:var(--text3);margin-top:3px">
+                  ${pct}% used &nbsp;·&nbsp; ${fmt((+item.amount||0) - (+item.spent||0))} remaining
+                  ${item.date_from ? ` &nbsp;·&nbsp; ${fmtDate(item.date_from)} — ${fmtDate(item.date_to)}` : ''}
+                </div>
               </div>
               <div style="text-align:right;flex-shrink:0">
-                <div style="font-size:16px;font-weight:800;color:var(--text)">${fmt(item.amount)}</div>
-                <span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:${item.status==='approved'?'rgba(34,197,94,.15)':'rgba(245,158,11,.15)'};color:${item.status==='approved'?'#4ade80':'var(--amber)'}">${item.status || 'draft'}</span>
-                ${canRequest && item.status === 'approved' ? `
-                <div style="margin-top:6px">
-                  <button class="btn btn-primary btn-sm" style="font-size:10px" onclick="requestBudgetPayment(${item.id},'${sanitise(item.title)}',${item.amount-(item.spent||0)})">
-                    <i class="ti ti-send"></i> Request Payment
-                  </button>
-                </div>` : ''}
+                <div style="font-size:18px;font-weight:900;color:var(--text)">${fmt(item.amount)}</div>
+                <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:${item.status === 'approved' ? 'rgba(34,197,94,.15)' : item.status === 'declined' ? 'rgba(239,68,68,.12)' : 'rgba(245,158,11,.15)'};color:${item.status === 'approved' ? '#4ade80' : item.status === 'declined' ? 'var(--red)' : 'var(--amber)'}">
+                  ${item.status || 'pending'}
+                </span>
+                <div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end;flex-wrap:wrap">
+                  ${isAdmin && item.status === 'pending' ? `
+                    <button class="btn btn-primary btn-sm" style="font-size:10px" onclick="approveBudgetItem(${item.id})">
+                      <i class="ti ti-check"></i> Approve
+                    </button>
+                    <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" onclick="declineBudgetItem(${item.id})">
+                      <i class="ti ti-x"></i> Decline
+                    </button>` : ''}
+                  ${canAct && item.status === 'approved' ? `
+                    <button class="btn btn-primary btn-sm" style="font-size:10px" onclick="requestBudgetPayment(${item.id},'${sanitise(item.title)}',${(+item.amount||0)-(+item.spent||0)})">
+                      <i class="ti ti-send"></i> Request Payment
+                    </button>` : ''}
+                  ${isAdmin ? `
+                    <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" onclick="deleteBudgetItem(${item.id})">
+                      <i class="ti ti-trash"></i>
+                    </button>` : ''}
+                </div>
               </div>
             </div>
           </div>`;
@@ -7407,154 +7441,252 @@ async function pgBudget() {
   `);
 }
 
-function showNewBudgetItem() {
-  showModal('Post Budget Item', `
-    <div class="form-group">
-      <label class="form-label">Title *</label>
-      <input class="form-input" id="bi-title" placeholder="e.g. Q3 Vehicle Maintenance">
-    </div>
+// ── Create / edit a budget item ────────────────────────────────────────────
+async function showNewBudgetItem(editItem) {
+  const categories = window._budgetCategories || await api('GET','/api/budget/categories').catch(()=>[]);
+  const isEdit = !!editItem;
+
+  showModal(isEdit ? 'Edit Budget Item' : 'New Budget Item', `
     <div class="form-row">
-      <div class="form-group">
-        <label class="form-label">Department</label>
-        <input class="form-input" id="bi-dept" value="${sanitise(user.department || user.role?.replace(/_/g,' ') || '')}">
+      <div class="form-group" style="flex:2">
+        <label class="form-label">Title *</label>
+        <input class="form-input" id="bi-title" placeholder="e.g. Camera and AI Cam Installation Project"
+               value="${isEdit ? sanitise(editItem.title) : ''}">
       </div>
-      <div class="form-group">
-        <label class="form-label">Amount (₦) *</label>
-        <input class="form-input" type="number" id="bi-amount" placeholder="0">
+      <div class="form-group" style="flex:1">
+        <label class="form-label">Department</label>
+        <input class="form-input" id="bi-dept"
+               value="${isEdit ? sanitise(editItem.department||'') : sanitise(user.department || user.role?.replace(/_/g,' ') || '')}">
       </div>
     </div>
+
     <div class="form-group">
       <label class="form-label">Description / Justification</label>
-      <textarea class="form-input" id="bi-desc" rows="3" placeholder="What is this budget for? Why is it needed?"></textarea>
+      <textarea class="form-input" id="bi-desc" rows="2"
+                placeholder="What is this budget for? Why is it needed?">${isEdit ? sanitise(editItem.description||'') : ''}</textarea>
     </div>
+
+    <!-- ── Budget Line Items (creatable rows) ── -->
+    <div style="margin:12px 0 8px;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">
+      Budget Line Items
+    </div>
+    <div id="bi-lines-wrap">
+      ${isEdit && editItem.line_items ? JSON.parse(editItem.line_items).map((li,i) => buildLineItemRow(i, categories, li)).join('') : buildLineItemRow(0, categories)}
+    </div>
+    <button class="btn btn-ghost btn-sm" onclick="addBudgetLine()" style="font-size:11px;margin-bottom:12px">
+      <i class="ti ti-plus"></i> Add Line Item
+    </button>
+
+    <!-- ── Total ── -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--ink3);border-radius:8px;margin-bottom:12px;border:1px solid rgba(201,168,76,.2)">
+      <span style="font-weight:700;font-size:13px;color:var(--text3)">Total Budget</span>
+      <span id="bi-total-display" style="font-size:20px;font-weight:900;color:var(--gold)">₦0</span>
+    </div>
+
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">From Date</label>
-        <input class="form-input" type="date" id="bi-from">
+        <label class="form-label">Start Date</label>
+        <input class="form-input" type="date" id="bi-from" value="${isEdit ? (editItem.date_from||'').slice(0,10) : ''}">
       </div>
       <div class="form-group">
-        <label class="form-label">To Date</label>
-        <input class="form-input" type="date" id="bi-to">
+        <label class="form-label">End Date</label>
+        <input class="form-input" type="date" id="bi-to" value="${isEdit ? (editItem.date_to||'').slice(0,10) : ''}">
       </div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn btn-primary btn-block" onclick="submitBudgetItem()">
-        <i class="ti ti-send"></i> Post Budget Item
+
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn btn-primary btn-block" id="bi-save-btn"
+              onclick="submitBudgetItem(${isEdit ? editItem.id : 'null'})">
+        <i class="ti ti-device-floppy"></i> Save Budget
       </button>
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
     </div>
   `);
+
+  // Store categories for dynamic rows
+  window._budgetCategories = categories;
+  recalcBudgetTotal();
 }
 
-async function submitBudgetItem() {
-  const title  = el('bi-title')?.value?.trim();
-  const amount = el('bi-amount')?.value;
-  if (!title || !amount) { showToast('Title and amount are required', 'error'); return; }
+function buildLineItemRow(idx, categories, prefill) {
+  const cats = (categories.length ? categories : ['Fuel','Maintenance','Accommodation',
+    'Dispatch','Driver Allowance','Other Overhead','Logistics','Admin','Operations',
+    'Compliance','IT & Technology','Training','Miscellaneous'])
+    .map(c => `<option value="${c}" ${prefill?.category===c?'selected':''}>${c}</option>`).join('');
+  return `
+  <div class="bi-line-row" id="bi-line-${idx}" style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+    <select class="form-input" id="bi-cat-${idx}" style="flex:1.2" onchange="recalcBudgetTotal()">
+      <option value="">— Category —</option>
+      ${cats}
+    </select>
+    <input class="form-input" id="bi-line-title-${idx}" placeholder="Description (optional)"
+           style="flex:2" value="${prefill?.title||''}">
+    <input class="form-input" type="number" id="bi-line-amt-${idx}" placeholder="₦ Amount"
+           style="flex:1;min-width:90px" value="${prefill?.amount||''}"
+           oninput="recalcBudgetTotal()">
+    <button class="btn btn-ghost btn-sm" style="padding:6px 8px;flex-shrink:0;color:var(--red)"
+            onclick="removeBudgetLine(${idx})" title="Remove">
+      <i class="ti ti-trash" style="font-size:14px"></i>
+    </button>
+  </div>`;
+}
+
+let _biLineCount = 1;
+function addBudgetLine() {
+  const wrap = document.getElementById('bi-lines-wrap');
+  if (!wrap) return;
+  const cats = window._budgetCategories || [];
+  const row  = document.createElement('div');
+  row.innerHTML = buildLineItemRow(_biLineCount, cats);
+  wrap.appendChild(row.firstElementChild);
+  _biLineCount++;
+  recalcBudgetTotal();
+}
+
+function removeBudgetLine(idx) {
+  const row = document.getElementById('bi-line-' + idx);
+  if (row) row.remove();
+  recalcBudgetTotal();
+}
+
+function recalcBudgetTotal() {
+  let total = 0;
+  document.querySelectorAll('[id^="bi-line-amt-"]').forEach(inp => {
+    total += parseFloat(inp.value) || 0;
+  });
+  const disp = document.getElementById('bi-total-display');
+  if (disp) {
+    disp.textContent = '₦' + total.toLocaleString('en-NG');
+  }
+}
+
+function collectBudgetLines() {
+  const lines = [];
+  document.querySelectorAll('.bi-line-row').forEach(row => {
+    const id    = row.id.replace('bi-line-','');
+    const cat   = document.getElementById('bi-cat-'+id)?.value;
+    const title = document.getElementById('bi-line-title-'+id)?.value?.trim();
+    const amt   = parseFloat(document.getElementById('bi-line-amt-'+id)?.value) || 0;
+    if (cat || amt) lines.push({ category: cat, title: title || cat, amount: amt });
+  });
+  return lines;
+}
+
+async function submitBudgetItem(editId) {
+  const title = el('bi-title')?.value?.trim();
+  if (!title) { showToast('Budget title is required', 'error'); el('bi-title')?.focus(); return; }
+
+  const lines = collectBudgetLines();
+  if (!lines.length) { showToast('Add at least one budget line item', 'error'); return; }
+
+  const totalAmt = lines.reduce((s, l) => s + l.amount, 0);
+  if (totalAmt <= 0) { showToast('Total budget amount must be greater than zero', 'error'); return; }
+
+  const btn = el('bi-save-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Saving…'; }
+
+  const payload = {
+    title,
+    amount:      totalAmt,
+    department:  el('bi-dept')?.value?.trim() || user.department || user.role,
+    description: el('bi-desc')?.value?.trim(),
+    date_from:   el('bi-from')?.value || null,
+    date_to:     el('bi-to')?.value   || null,
+    line_items:  JSON.stringify(lines),
+    posted_by:   user.full_name || user.name,
+    status:      'pending',
+  };
+
   try {
-    await api('POST', '/api/budget/items', {
-      title, amount: +amount,
-      department:   el('bi-dept')?.value?.trim() || user.department || user.role,
-      description:  el('bi-desc')?.value?.trim(),
-      date_from:    el('bi-from')?.value || null,
-      date_to:      el('bi-to')?.value  || null,
-      posted_by:    user.full_name || user.name,
-      status:       'pending',
-    });
     clearCache();
+    if (editId) {
+      await api('PATCH', `/api/budget/items/${editId}`, payload);
+    } else {
+      await api('POST', '/api/budget/items', payload);
+    }
     closeModal();
-    showToast('Budget item posted ✓', 'success');
+    showToast(editId ? 'Budget item updated ✓' : 'Budget item posted ✓', 'success');
     pgBudget();
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save Budget'; }
+    showToast(e.message, 'error');
+  }
+}
+
+async function approveBudgetItem(id) {
+  try {
+    await api('PATCH', `/api/budget/items/${id}`, { status: 'approved' });
+    clearCache(); showToast('Budget item approved ✓', 'success'); pgBudget();
   } catch(e) { showToast(e.message, 'error'); }
 }
 
-async function requestBudgetPayment(itemId, itemTitle, maxAmount) {
-  showModal(`Request Payment — ${sanitise(itemTitle)}`, `
-    <div style="background:rgba(79,142,247,.07);border:1px solid rgba(79,142,247,.2);border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px">
-      <i class="ti ti-info-circle" style="color:var(--accent)"></i>
-      This will create a payment request in the Payments module for approval.
-      Available budget: <strong>${fmt(maxAmount)}</strong>
+async function declineBudgetItem(id) {
+  try {
+    await api('PATCH', `/api/budget/items/${id}`, { status: 'declined' });
+    clearCache(); showToast('Budget item declined', 'success'); pgBudget();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function deleteBudgetItem(id) {
+  if (!confirm('Delete this budget item? This cannot be undone.')) return;
+  try {
+    await api('DELETE', `/api/budget/items/${id}`);
+    clearCache(); showToast('Removed ✓', 'success'); pgBudget();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+// ── Category management (admin) ─────────────────────────────────────────────
+async function showManageBudgetCategories() {
+  const cats = await api('GET', '/api/budget/categories').catch(() => []);
+  const list = cats.length ? cats : window._budgetCategories || [];
+
+  showModal('Budget Categories', `
+    <div style="margin-bottom:12px;font-size:12px;color:var(--text3)">
+      These categories appear in every budget line item dropdown. Add or remove as needed.
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label class="form-label">Amount to Request (₦) *</label>
-        <input class="form-input" type="number" id="bp-amt" placeholder="0" max="${maxAmount}">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Category</label>
-        <select class="form-input" id="bp-cat">
-          <option>Operations</option><option>Maintenance</option><option>HR</option>
-          <option>Admin</option><option>Finance</option><option>Logistics</option><option>Other</option>
-        </select>
-      </div>
+
+    <div id="cat-list" style="margin-bottom:12px;max-height:280px;overflow-y:auto">
+      ${list.map((c, i) => `
+        <div id="cat-row-${i}" style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)">
+          <span style="flex:1;font-size:13px;color:var(--text)">${sanitise(c)}</span>
+          <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red);padding:4px 8px"
+                  onclick="deleteBudgetCategory('${sanitise(c)}')">
+            <i class="ti ti-trash"></i>
+          </button>
+        </div>`).join('')}
     </div>
-    <div class="form-group">
-      <label class="form-label">Narration</label>
-      <input class="form-input" id="bp-desc" value="${sanitise(itemTitle)}">
-    </div>
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn btn-primary btn-block" onclick="submitBudgetPaymentRequest(${itemId},${maxAmount})">
-        <i class="ti ti-arrow-right"></i> Send to Payments
+
+    <div style="display:flex;gap:8px;align-items:center">
+      <input class="form-input" id="new-cat-input" placeholder="New category name…" style="flex:1"
+             onkeydown="if(event.key==='Enter')addBudgetCategory()">
+      <button class="btn btn-primary btn-sm" onclick="addBudgetCategory()">
+        <i class="ti ti-plus"></i> Add
       </button>
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
     </div>
   `);
 }
 
-async function submitBudgetPaymentRequest(itemId, maxAmount) {
-  const amount = +(el('bp-amt')?.value || 0);
-  if (!amount || amount <= 0) { showToast('Enter a valid amount', 'error'); return; }
-  if (amount > maxAmount) { showToast(`Amount exceeds available budget of ${fmt(maxAmount)}`, 'error'); return; }
+async function addBudgetCategory() {
+  const name = el('new-cat-input')?.value?.trim();
+  if (!name) return;
   try {
-    await api('POST', '/api/requests', {
-      description:  el('bp-desc')?.value || '',
-      amount,
-      category:     el('bp-cat')?.value || 'Operations',
-      priority:     'normal',
-      budget_item_id: itemId,
-      source:       'budget',
-    });
+    await api('POST', '/api/budget/categories', { name });
     clearCache();
-    closeModal();
-    showToast('Payment request created and sent for approval ✓', 'success');
-    navigate('requests');
+    showToast('Category added ✓', 'success');
+    showManageBudgetCategories();
   } catch(e) { showToast(e.message, 'error'); }
 }
 
-function showSetBudgetPeriod() {
-  showModal('Set Budget Period', `
-    <div class="form-group">
-      <label class="form-label">Period Label</label>
-      <input class="form-input" id="bp-label" placeholder="e.g. Q3 2026, July Budget">
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label class="form-label">From *</label>
-        <input class="form-input" type="date" id="bp-from">
-      </div>
-      <div class="form-group">
-        <label class="form-label">To *</label>
-        <input class="form-input" type="date" id="bp-to">
-      </div>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn btn-primary btn-block" onclick="saveBudgetPeriod()">Save Period</button>
-      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-    </div>
-  `);
-}
-
-async function saveBudgetPeriod() {
-  const label = el('bp-label')?.value;
-  const from  = el('bp-from')?.value;
-  const to    = el('bp-to')?.value;
-  if (!from || !to) { showToast('Set both from and to dates', 'error'); return; }
+async function deleteBudgetCategory(name) {
+  if (!confirm(`Delete category "${name}"?`)) return;
   try {
-    await api('POST', '/api/budget/settings', { period_label: label, period_from: from, period_to: to });
-    clearCache(); closeModal();
-    showToast('Budget period updated ✓', 'success');
-    pgBudget();
+    await api('DELETE', '/api/budget/categories/' + encodeURIComponent(name));
+    clearCache();
+    showToast('Category removed ✓', 'success');
+    showManageBudgetCategories();
   } catch(e) { showToast(e.message, 'error'); }
 }
+
 
 async function pgVendorPortal() {
   const isAdmin = ['real_admin','super_admin','admin'].includes(user.role);
