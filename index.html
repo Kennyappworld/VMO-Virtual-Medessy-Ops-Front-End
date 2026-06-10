@@ -1096,6 +1096,7 @@ const ALL_PAGES = [
   { id:'history',      icon:'ti-table-export',    label:'History & Export',section:'Admin' },
   { id:'budget',       icon:'ti-report-money',    label:'Budget & Planning',section:'Finance' },
   { id:'vendor-portal',icon:'ti-building-store',  label:'Vendor Portal',  section:'Admin' },
+  { id:'locations',    icon:'ti-map-pin',         label:'Store Locations', section:'Admin' },
 ];
 
 const ROLE_PAGES = {
@@ -1110,6 +1111,8 @@ const ROLE_PAGES = {
   pool_manager:       ['dashboard','issues','requests','fuel','vehicles','drivers','reservations','compliance','companies','chat','availability','meetings'],
   logistics_supervisor:['dashboard','issues','availability','chat'],
   driver:             ['dashboard','issues','fuel','reservations','chat'],
+  store_keeper:       ['dashboard','issues','inventory','chat','budget'],
+  store_manager:      ['dashboard','issues','inventory','vendors','chat','budget','users','locations'],
   staff:              ['dashboard','issues','requests','fuel','chat','budget'],
 };
 
@@ -4844,7 +4847,7 @@ function showNewDriver() {
     <div class="form-row">
       <div class="form-group"><label class="form-label">Account Name</label><input class="form-input" id="nd-aname" placeholder="John Doe"></div>
       <div class="form-group"><label class="form-label">Depot</label>
-        <select class="form-input" id="nd-depot"><option>Lagos</option><option>Benin</option><option>Onitsha</option></select></div>
+        <select class="form-input" id="nd-depot">${(window._storeLocations||['Lagos','Benin','Onitsha']).map(l=>`<option>${l}</option>`).join('')}</select></div>
     </div>
     <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn btn-primary btn-block" onclick="submitDriver()">Add Driver</button>
@@ -5569,6 +5572,275 @@ function switchImprestTab(tab) {
 }
 
 // Link an imprest account to a petrol station vendor
+// ── Create new imprest account ────────────────────────────────────────────────
+async function showNewImprest() {
+  const vendors = await api('GET', '/api/vendors').catch(() => []);
+  const petrolVendors = vendors.filter(v =>
+    (v.vendor_type || '').toLowerCase().includes('petrol') ||
+    (v.products_services || '').toLowerCase().includes('fuel') ||
+    (v.products_services || '').toLowerCase().includes('diesel')
+  );
+
+  showModal('New Imprest Account', `
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Account Name *</label>
+        <input class="form-input" id="ni-label" placeholder="e.g. Imprest 4 — Operations">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Account Type</label>
+        <select class="form-input" id="ni-type" onchange="toggleFuelFloatSection()">
+          <option value="personal">Personal / Staff</option>
+          <option value="operational">Operational</option>
+          <option value="fuel_float">Fuel Float (linked to petrol station)</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Account Holder Name</label>
+        <input class="form-input" id="ni-holder" placeholder="e.g. Richard Adetuwo">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Bank</label>
+        <input class="form-input" id="ni-bank" placeholder="e.g. Zenith Bank">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Opening Balance (₦)</label>
+        <input class="form-input" type="number" id="ni-balance" placeholder="0" value="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Currency</label>
+        <select class="form-input" id="ni-currency">
+          <option value="NGN">NGN — Nigerian Naira</option>
+          <option value="USD">USD — US Dollar</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Fuel float section — shown only for fuel_float type -->
+    <div id="ni-fuel-section" style="display:none;background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.2);border-radius:10px;padding:12px;margin-top:4px">
+      <div style="font-size:11px;font-weight:700;color:var(--gold);text-transform:uppercase;margin-bottom:10px">
+        ⛽ Link to Petrol Station Vendor
+      </div>
+      <div class="form-group">
+        <label class="form-label">Petrol Station</label>
+        <select class="form-input" id="ni-vendor">
+          <option value="">— Select vendor —</option>
+          ${petrolVendors.map(v => `<option value="${v.id}">⛽ ${sanitise(v.company_name || v.name)}</option>`).join('')}
+          ${vendors.filter(v => !petrolVendors.includes(v)).map(v => `<option value="${v.id}">${sanitise(v.company_name || v.name)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-primary btn-block" id="ni-btn" onclick="submitNewImprest()">
+        <i class="ti ti-wallet"></i> Create Account
+      </button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+function toggleFuelFloatSection() {
+  const type = el('ni-type')?.value;
+  const sec  = el('ni-fuel-section');
+  if (sec) sec.style.display = type === 'fuel_float' ? 'block' : 'none';
+}
+
+async function submitNewImprest() {
+  const label = el('ni-label')?.value?.trim();
+  if (!label) { showToast('Account name is required', 'error'); el('ni-label')?.focus(); return; }
+
+  const btn = el('ni-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Creating…'; }
+
+  const payload = {
+    label,
+    account_type:     el('ni-type')?.value     || 'personal',
+    holder_name:      el('ni-holder')?.value?.trim() || '',
+    bank_name:        el('ni-bank')?.value?.trim()   || '',
+    balance:          parseFloat(el('ni-balance')?.value) || 0,
+    currency:         el('ni-currency')?.value  || 'NGN',
+    linked_vendor_id: el('ni-vendor')?.value    || null,
+    status:           'active',
+  };
+
+  try {
+    clearCache();
+    await api('POST', '/api/imprest', payload);
+    closeModal();
+    showToast('Imprest account created ✓', 'success');
+    pgImprest();
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-wallet"></i> Create Account'; }
+    showToast(e.message || 'Could not create account', 'error');
+  }
+}
+
+// ── Imprest stats overview ─────────────────────────────────────────────────
+async function showImprestStats() {
+  const [accounts, retirements] = await Promise.all([
+    api('GET', '/api/imprest').catch(() => []),
+    api('GET', '/api/imprest/retirements').catch(() => []),
+  ]);
+
+  const total      = accounts.reduce((s, a) => s + (+a.balance || 0), 0);
+  const fuelFloats = accounts.filter(a => a.account_type === 'fuel_float');
+  const fuelTotal  = fuelFloats.reduce((s, a) => s + (+a.balance || 0), 0);
+  const pending    = retirements.filter(r => r.status === 'pending');
+  const pendingAmt = pending.reduce((s, r) => s + (+r.amount || 0), 0);
+  const approved30 = retirements.filter(r => {
+    if (r.status !== 'approved') return false;
+    return new Date(r.updated_at) > new Date(Date.now() - 30 * 86400000);
+  });
+  const approved30Amt = approved30.reduce((s, r) => s + (+r.amount || 0), 0);
+
+  showModal('Imprest Overview', `
+    <div class="stat-grid" style="margin-bottom:16px">
+      <div class="stat-card stat-gold">
+        <div class="stat-label">Total Float</div>
+        <div class="stat-value" style="font-size:18px">${fmt(total)}</div>
+        <div class="stat-sub">${accounts.length} accounts</div>
+      </div>
+      <div class="stat-card stat-green">
+        <div class="stat-label">Fuel Floats</div>
+        <div class="stat-value" style="font-size:18px">${fmt(fuelTotal)}</div>
+        <div class="stat-sub">${fuelFloats.length} linked</div>
+      </div>
+      <div class="stat-card stat-amber">
+        <div class="stat-label">Pending Retirements</div>
+        <div class="stat-value">${pending.length}</div>
+        <div class="stat-sub">${fmt(pendingAmt)}</div>
+      </div>
+      <div class="stat-card stat-blue">
+        <div class="stat-label">Approved (30d)</div>
+        <div class="stat-value">${approved30.length}</div>
+        <div class="stat-sub">${fmt(approved30Amt)}</div>
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="data-table">
+        <thead><tr><th>Account</th><th>Holder</th><th>Bank</th><th>Type</th><th style="text-align:right">Balance</th><th>Status</th></tr></thead>
+        <tbody>
+          ${accounts.map(a => `<tr>
+            <td><strong>${sanitise(a.label || a.name)}</strong></td>
+            <td>${sanitise(a.holder_name || '—')}</td>
+            <td>${sanitise(a.bank_name || '—')}</td>
+            <td><span style="font-size:10px;padding:2px 6px;border-radius:8px;background:rgba(201,168,76,.12);color:var(--gold)">${a.account_type || 'personal'}</span></td>
+            <td style="text-align:right;font-weight:700;color:${+a.balance>0?'var(--green)':'var(--red)'}">${fmt(a.balance)}</td>
+            <td><span style="font-size:10px;padding:2px 6px;border-radius:8px;background:rgba(34,197,94,.12);color:#4ade80">${a.status || 'active'}</span></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <button class="btn btn-ghost btn-block btn-sm" style="margin-top:12px" onclick="closeModal()">Close</button>
+  `, 'lg');
+}
+
+// ── Store Locations page ───────────────────────────────────────────────────
+async function pgLocations() {
+  const isAdmin = ['real_admin','super_admin','admin','store_manager'].includes(user.role);
+  html('topbar-btn', isAdmin
+    ? `<button class="topbar-action" onclick="showNewLocation()"><i class="ti ti-plus"></i></button>`
+    : '');
+
+  const locs = await api('GET', '/api/store/locations').catch(() => []);
+  window._storeLocations = locs.length ? locs.map(l => l.name) : ['Lagos','Benin','Onitsha'];
+
+  html('page-content', `
+    <div style="margin-bottom:14px;font-size:12px;color:var(--text3)">
+      Store locations define the depots where inventory is held.
+      Each inventory item is assigned to a location.
+      ${isAdmin ? 'Create, edit or delete locations below.' : ''}
+    </div>
+
+    ${locs.length ? locs.map(loc => `
+    <div class="card" style="margin-bottom:8px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div>
+        <div style="font-weight:700;font-size:14px">${sanitise(loc.name)}</div>
+        ${loc.address ? `<div style="font-size:12px;color:var(--text3)">${sanitise(loc.address)}</div>` : ''}
+        ${loc.manager_name ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">Manager: ${sanitise(loc.manager_name)}</div>` : ''}
+      </div>
+      ${isAdmin ? `
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="showEditLocation(${loc.id},'${sanitise(loc.name)}','${sanitise(loc.address||'')}','${sanitise(loc.manager_name||'')}')">
+          <i class="ti ti-pencil"></i>
+        </button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteLocation(${loc.id},'${sanitise(loc.name)}')">
+          <i class="ti ti-trash"></i>
+        </button>
+      </div>` : ''}
+    </div>`) .join('') : `
+    <div class="empty-state">
+      <div class="empty-icon"><i class="ti ti-map-pin"></i></div>
+      <div class="empty-title">No store locations yet</div>
+      <div class="empty-sub">${isAdmin ? 'Click + to add your first location' : 'No locations configured'}</div>
+    </div>`}
+  `);
+}
+
+function showNewLocation(editData) {
+  const isEdit = !!editData;
+  showModal(isEdit ? 'Edit Location' : 'Add Store Location', `
+    <div class="form-group">
+      <label class="form-label">Location Name *</label>
+      <input class="form-input" id="sl-name" placeholder="e.g. Lagos, Benin, Onitsha" value="${isEdit ? sanitise(editData.name) : ''}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Address</label>
+      <input class="form-input" id="sl-addr" placeholder="Full address (optional)" value="${isEdit ? sanitise(editData.address||'') : ''}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Location Manager</label>
+      <input class="form-input" id="sl-mgr" placeholder="Manager name (optional)" value="${isEdit ? sanitise(editData.manager||'') : ''}">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-block" onclick="saveLocation(${isEdit ? editData.id : 'null'})">
+        <i class="ti ti-map-pin"></i> ${isEdit ? 'Update Location' : 'Save Location'}
+      </button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+function showEditLocation(id, name, address, manager) {
+  showNewLocation({ id, name, address, manager });
+}
+
+async function saveLocation(id) {
+  const name = el('sl-name')?.value?.trim();
+  if (!name) { showToast('Location name is required', 'error'); return; }
+  try {
+    clearCache();
+    if (id) {
+      await api('PATCH', `/api/store/locations/${id}`, {
+        name, address: el('sl-addr')?.value?.trim(), manager_name: el('sl-mgr')?.value?.trim()
+      });
+      showToast('Location updated ✓', 'success');
+    } else {
+      await api('POST', '/api/store/locations', {
+        name, address: el('sl-addr')?.value?.trim(), manager_name: el('sl-mgr')?.value?.trim()
+      });
+      showToast('Location added ✓', 'success');
+    }
+    closeModal();
+    pgLocations();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function deleteLocation(id, name) {
+  if (!confirm(`Delete location "${name}"? This won't delete inventory items at this location.`)) return;
+  try {
+    clearCache();
+    await api('DELETE', `/api/store/locations/${id}`);
+    showToast('Location removed ✓', 'success');
+    pgLocations();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
 async function showLinkImprestVendor(accountId, accountName, currentVendorId) {
   const vendors = await api('GET', '/api/vendors').catch(() => []);
   const petrolVendors = vendors.filter(v =>
@@ -6069,7 +6341,10 @@ async function submitReservation() {
 // super-admin only delete with reversible audit trail, standard GRN/SRN templates
 // ──────────────────────────────────────────────────────────────────────────────
 async function pgInventory() {
-  const isSuperAdmin = ['real_admin','super_admin'].includes(user.role);
+  // Load store locations first so dropdowns are populated
+  const locs = await api('GET', '/api/store/locations').catch(() => []);
+  window._storeLocations = locs.length ? locs.map(l => l.name) : ['Lagos','Benin','Onitsha'];
+  const isSuperAdmin = ['real_admin','super_admin','admin','store_manager'].includes(user.role);
   html('topbar-btn', `
     <div style="display:flex;gap:6px">
       <button class="btn btn-ghost btn-sm" onclick="showReceiveStock()" style="font-size:11px"><i class="ti ti-download"></i> Receive (GRN)</button>
@@ -6098,7 +6373,7 @@ async function pgInventory() {
 
     <!-- Filter bar -->
     <div style="display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;padding-bottom:4px;flex-wrap:wrap">
-      ${['All','Lagos','Benin','Onitsha'].map(d=>`<button class="group-chip ${d==='All'?'active':''}" onclick="filterInv('${d}')" data-depot="${d}">${d}</button>`).join('')}
+      ${['All',...(window._storeLocations||['Lagos','Benin','Onitsha'])].map(d=>`<button class="group-chip ${d==='All'?'active':''}" onclick="filterInv('${d}')" data-depot="${d}">${d}</button>`).join('')}
       <div style="flex:1;min-width:140px;display:flex;align-items:center;gap:8px;background:var(--ink3);border:1px solid var(--b2);border-radius:22px;padding:6px 12px;margin-left:4px">
         <i class="ti ti-search" style="color:var(--t3);font-size:13px"></i>
         <input id="store-search" placeholder="Search items…" oninput="filterInvSearch()" style="background:none;border:none;outline:none;color:var(--t1);font-size:12px;width:100%">
