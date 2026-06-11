@@ -3857,8 +3857,8 @@ async function submitNewTrip() {
     trip_date:           el('nt-date')?.value,
     waybill_number:      el('nt-waybill')?.value?.trim(),
     invoice_number:      el('nt-invoice')?.value?.trim(),
-    vehicle_id:          el('nt-veh')?.value,
-    driver_id:           el('nt-drv')?.value,
+    vehicle_id:          (getSSValue('nt-veh') || el('nt-veh')?.value || ''),
+    driver_id:           (getSSValue('nt-drv') || el('nt-drv')?.value || ''),
     loading_site:        el('nt-load')?.value?.trim(),
     offloading_site:     el('nt-offload')?.value?.trim(),
     to_km:               el('nt-km')?.value,
@@ -10013,10 +10013,10 @@ async function submitNewTripEnforced() {
   // 2. Check required fields
   if (!el('nt-waybill')?.value) { showToast('Waybill number is required', 'error'); return; }
   if (!el('nt-cust')?.value) { showToast('Customer name is required', 'error'); return; }
-  if (!el('nt-veh')?.value) { showToast('Please select a vehicle', 'info'); return; }
+  if (!(getSSValue('nt-veh') || el('nt-veh')?.value || '')) { showToast('Please select a vehicle', 'info'); return; }
 
   // 3. Check vehicle has no open trip
-  const vehicleId = el('nt-veh')?.value;
+  const vehicleId = (getSSValue('nt-veh') || el('nt-veh')?.value || '');
   try {
     const openTrips = await api('GET', `/api/trips?vehicle_id=${vehicleId}&open=1`).catch(()=>[]);
     const open = openTrips.find(t => t.trip_status && !['closed'].includes(t.trip_status));
@@ -10043,7 +10043,7 @@ async function submitNewTripEnforced() {
     waybill_number: el('nt-waybill')?.value,
     invoice_number: el('nt-invoice')?.value,
     vehicle_id: vehicleId,
-    driver_id: el('nt-drv')?.value,
+    driver_id: (getSSValue('nt-drv') || el('nt-drv')?.value || ''),
     loading_site: el('nt-load')?.value,
     offloading_site: el('nt-offload')?.value,
     to_km: el('nt-km')?.value,
@@ -10694,6 +10694,9 @@ async function showNewTrip() {
     </div>
   `, 'lg');
 
+  // Auto-load vehicles and drivers for default company
+  setTimeout(() => { if (typeof loadCompanyAssets === 'function') loadCompanyAssets(); }, 300);
+
   // Auto-init multi-customer rows
   addCustomerRow(); addCustomerRow();
 }
@@ -10824,21 +10827,134 @@ function calcWaitTimes() {
 async function loadCompanyAssets() {
   const sel = el('nt-co');
   const compId = sel?.value;
-  const opt = sel?.options[sel.selectedIndex];
-  const dieselPrice = opt?.dataset?.diesel || 990;
-  const dpEl = el('nt-dprice');
-  if (dpEl) dpEl.value = dieselPrice;
-
   if (!compId) return;
-  const [vehs, drvs] = await Promise.all([
-    api('GET',`/api/companies/${compId}/vehicles`).catch(()=>[]),
-    api('GET',`/api/companies/${compId}/drivers`).catch(()=>[]),
-  ]);
+
+  // Show loading state in dropdowns
   const vSel = el('nt-veh');
   const dSel = el('nt-drv');
-  if (vSel) vSel.innerHTML = vehs.map(v=>`<option value="${v.id}">${v.plate_number}</option>`).join('');
-  if (dSel) dSel.innerHTML = drvs.map(d=>`<option value="${d.id}">${d.full_name||d.name}</option>`).join('');
+  if (vSel) { vSel.innerHTML = '<option>Loading vehicles…</option>'; vSel.disabled = true; }
+  if (dSel) { dSel.innerHTML = '<option>Loading drivers…</option>'; dSel.disabled = true; }
+
+  // Load vehicles and drivers assigned to this company
+  let [vehs, drvs] = await Promise.all([
+    api('GET', `/api/companies/${compId}/vehicles`).catch(() => []),
+    api('GET', `/api/companies/${compId}/drivers`).catch(() => []),
+  ]);
+
+  // If none assigned, fall back to ALL vehicles/drivers so nothing is blocked
+  if (!vehs.length) {
+    vehs = await api('GET', '/api/vehicles').catch(() => []);
+  }
+  if (!drvs.length) {
+    drvs = await api('GET', '/api/drivers').catch(() => []);
+  }
+
+  // Cache for search
+  window._ntVehicles = vehs;
+  window._ntDrivers  = drvs;
+
+  // Rebuild vehicle searchable dropdown
+  buildSearchableSelect('nt-veh', vehs, v => ({
+    value: v.id,
+    label: `${v.plate_number}${v.vehicle_type ? '  ·  ' + v.vehicle_type : ''}${v.fuel_type ? '  (' + v.fuel_type + ')' : ''}`,
+    sub: v.driver_name ? 'Driver: ' + v.driver_name : '',
+  }), 'Search vehicle plate…', 'checkVehicleOpenTrip');
+
+  // Rebuild driver searchable dropdown
+  buildSearchableSelect('nt-drv', drvs, d => ({
+    value: d.id,
+    label: d.full_name || d.name || 'Unknown',
+    sub: d.phone || d.licence_number || '',
+  }), 'Search driver name…', null);
+
+  // Update diesel rate from company option
+  const opt = sel?.options[sel.selectedIndex];
+  const dpEl = el('nt-dprice');
+  if (dpEl && opt?.dataset?.diesel) dpEl.value = opt.dataset.diesel;
 }
+
+// ── Searchable dropdown builder ──────────────────────────────────────────────
+// Replaces a <select> with a styled type-to-filter input + dropdown list
+function buildSearchableSelect(targetId, items, mapper, placeholder, onSelectFn) {
+  const orig = document.getElementById(targetId);
+  if (!orig) return;
+
+  // Build the wrapper
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'position:relative;width:100%';
+  wrapper.id = targetId + '-wrapper';
+
+  const input = document.createElement('input');
+  input.className = 'form-input';
+  input.placeholder = placeholder;
+  input.autocomplete = 'off';
+  input.id = targetId + '-search';
+  input.style.cssText = 'width:100%;cursor:text';
+
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.id = targetId + '-val';
+
+  const list = document.createElement('div');
+  list.id = targetId + '-list';
+  list.style.cssText = `
+    position:absolute;top:100%;left:0;right:0;z-index:9999;
+    background:var(--bg2, #1e2235);border:1px solid var(--border, #2a3050);
+    border-radius:8px;max-height:220px;overflow-y:auto;display:none;
+    box-shadow:0 8px 24px rgba(0,0,0,.4);margin-top:3px
+  `;
+
+  const mappedItems = items.map(mapper);
+
+  function renderList(query) {
+    const q = (query || '').toLowerCase();
+    const filtered = q ? mappedItems.filter(m => m.label.toLowerCase().includes(q) || (m.sub||'').toLowerCase().includes(q)) : mappedItems;
+    if (!filtered.length) {
+      list.innerHTML = '<div style="padding:12px 14px;font-size:13px;color:var(--text3)">No results found</div>';
+    } else {
+      list.innerHTML = filtered.map(m => `
+        <div class="ss-item" data-val="${m.value}" data-label="${m.label.replace(/"/g,'')}"
+          style="padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.04);transition:.1s"
+          onmouseover="this.style.background='rgba(79,142,247,.12)'"
+          onmouseout="this.style.background=''"
+          onclick="selectSSItem('${targetId}','${String(m.value).replace(/'/g,'')}','${m.label.replace(/'/g,'').replace(/"/g,'')}','${onSelectFn||''}')">
+          <div style="font-size:13px;color:var(--text, #e2e8f0);font-weight:500">${sanitise(m.label)}</div>
+          ${m.sub ? `<div style="font-size:11px;color:var(--text3, #64748b);margin-top:2px">${sanitise(m.sub)}</div>` : ''}
+        </div>`).join('');
+    }
+    list.style.display = 'block';
+  }
+
+  input.addEventListener('input', () => renderList(input.value));
+  input.addEventListener('focus', () => renderList(input.value));
+  input.addEventListener('blur', () => setTimeout(() => { list.style.display = 'none'; }, 200));
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { list.style.display = 'none'; input.blur(); }
+  });
+
+  wrapper.appendChild(input);
+  wrapper.appendChild(hidden);
+  wrapper.appendChild(list);
+
+  // Replace original element
+  orig.replaceWith(wrapper);
+}
+
+function selectSSItem(targetId, value, label, onSelectFn) {
+  const inp = document.getElementById(targetId + '-search');
+  const hid = document.getElementById(targetId + '-val');
+  const lst = document.getElementById(targetId + '-list');
+  if (inp) inp.value = label;
+  if (hid) hid.value = value;
+  if (lst) lst.style.display = 'none';
+  // Call any onSelect handler
+  if (onSelectFn && window[onSelectFn]) window[onSelectFn](value, label);
+}
+
+function getSSValue(targetId) {
+  return document.getElementById(targetId + '-val')?.value || '';
+}
+// ────────────────────────────────────────────────────────────────────────────
 
 function calcTripValues() {
   const toKm = parseFloat(el('nt-tokm')?.value||0);
@@ -10879,8 +10995,8 @@ async function submitTrip() {
     clearCache();
     await api('POST','/api/trips',{
       company_id: el('nt-co')?.value,
-      vehicle_id: el('nt-veh')?.value,
-      driver_id: el('nt-drv')?.value,
+      vehicle_id: (getSSValue('nt-veh') || el('nt-veh')?.value || ''),
+      driver_id: (getSSValue('nt-drv') || el('nt-drv')?.value || ''),
       trip_date: el('nt-date')?.value,
       shipment_number: el('nt-ship')?.value,
       waybill_number: el('nt-waybill')?.value,
