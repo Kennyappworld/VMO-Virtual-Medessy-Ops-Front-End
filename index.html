@@ -3741,10 +3741,10 @@ async function submitFuelV2() {
 }
 async function submitNewTrip() {
   // ── Guard: loading waybill is required ──
-  const wbDoc1 = el('nt-wb-1')?.files?.[0];
-  if (!wbDoc1) {
-    showToast('Please attach the loading waybill (Document 1 is required)', 'error');
-    el('nt-wb-1')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const wbFiles = _waybillFiles['nt-wb-files'] || [];
+  if (wbFiles.length === 0) {
+    showToast('Please attach at least one loading waybill before saving the trip', 'error');
+    document.getElementById('nt-wb-dropzone')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;
   }
 
@@ -3756,15 +3756,7 @@ async function submitNewTrip() {
   }
 
   // ── Convert loading waybill docs to base64 ──
-  const loadingDocs = [];
-  for (let i = 1; i <= 4; i++) {
-    const f = el(`nt-wb-${i}`)?.files?.[0];
-    if (f) {
-      if (f.size > 10 * 1024 * 1024) { showToast(`Document ${i} exceeds 10 MB`, 'error'); return; }
-      const b64 = await fileToBase64(f);
-      loadingDocs.push({ name: f.name, type: f.type, data: b64 });
-    }
-  }
+  const loadingDocs = await getWaybillDocs('nt-wb-files');
 
   const isMulti = el('nt-multi-toggle')?.checked;
   const payload = {
@@ -9965,6 +9957,107 @@ async function submitNewTripEnforced() {
   } catch(e) { alert(e.message||'Failed to save trip'); }
 }
 
+// ════════════════════════════════════════════════════════════════
+// WAYBILL ATTACHMENT HELPERS
+// ════════════════════════════════════════════════════════════════
+
+// Store attached files in memory (keyed by list id)
+const _waybillFiles = {};
+
+function addWaybillFiles(input, listId, dropzoneId) {
+  if (!_waybillFiles[listId]) _waybillFiles[listId] = [];
+  const maxSize = 10 * 1024 * 1024; // 10 MB
+  let rejected = 0;
+
+  Array.from(input.files).forEach(file => {
+    if (file.size > maxSize) { rejected++; return; }
+    // Avoid exact duplicates by name+size
+    const dup = _waybillFiles[listId].find(f => f.name === file.name && f.size === file.size);
+    if (!dup) _waybillFiles[listId].push(file);
+  });
+
+  if (rejected) showToast(`${rejected} file${rejected > 1 ? 's' : ''} skipped — each file must be under 10 MB`, 'error');
+  input.value = ''; // reset so same file can be re-added if needed
+  renderWaybillList(listId, dropzoneId);
+}
+
+function handleWaybillDrop(event, listId, dropzoneId) {
+  event.preventDefault();
+  const dz = document.getElementById(dropzoneId);
+  if (dz) dz.style.borderColor = 'rgba(239,68,68,.3)';
+  const input = { files: event.dataTransfer.files };
+  addWaybillFiles(input, listId, dropzoneId);
+}
+
+function removeWaybillFile(listId, dropzoneId, idx) {
+  if (_waybillFiles[listId]) _waybillFiles[listId].splice(idx, 1);
+  renderWaybillList(listId, dropzoneId);
+}
+
+function renderWaybillList(listId, dropzoneId) {
+  const container = document.getElementById(listId);
+  const dz = document.getElementById(dropzoneId);
+  if (!container) return;
+
+  const files = _waybillFiles[listId] || [];
+
+  if (files.length === 0) {
+    container.innerHTML = '';
+    if (dz) dz.style.borderColor = 'rgba(239,68,68,.3)';
+    return;
+  }
+
+  // Update dropzone to show count
+  if (dz) {
+    dz.style.borderColor = 'var(--green)';
+    const countEl = dz.querySelector('.wb-count');
+    if (countEl) {
+      countEl.textContent = `${files.length} file${files.length > 1 ? 's' : ''} attached`;
+    } else {
+      const span = document.createElement('div');
+      span.className = 'wb-count';
+      span.style.cssText = 'font-size:11px;color:var(--green);font-weight:700;margin-top:4px';
+      span.textContent = `${files.length} file${files.length > 1 ? 's' : ''} attached`;
+      dz.appendChild(span);
+    }
+  }
+
+  container.innerHTML = files.map((f, i) => {
+    const isImage = f.type.startsWith('image/');
+    const icon = isImage ? 'ti-photo' : 'ti-file-type-pdf';
+    const iconColor = isImage ? 'var(--accent)' : '#f87171';
+    const sizeKB = (f.size / 1024).toFixed(0);
+    return `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--ink3);border-radius:8px;border:1px solid var(--border)">
+      <i class="ti ${icon}" style="font-size:18px;color:${iconColor};flex-shrink:0"></i>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${sanitise(f.name)}</div>
+        <div style="font-size:10px;color:var(--text3)">${sizeKB} KB</div>
+      </div>
+      <button onclick="removeWaybillFile('${listId}','${dropzoneId}',${i})"
+              style="background:none;border:none;cursor:pointer;color:var(--red);padding:4px;line-height:1;flex-shrink:0"
+              title="Remove">
+        <i class="ti ti-x" style="font-size:14px"></i>
+      </button>
+    </div>`;
+  }).join('');
+}
+
+async function getWaybillDocs(listId) {
+  const files = _waybillFiles[listId] || [];
+  const docs = [];
+  for (const f of files) {
+    const b64 = await fileToBase64(f);
+    docs.push({ name: f.name, type: f.type, size: f.size, data: b64 });
+  }
+  return docs;
+}
+
+function clearWaybillFiles(listId) {
+  _waybillFiles[listId] = [];
+}
+
+
 function fileToBase64(file) {
   return new Promise((res,rej) => {
     const reader = new FileReader();
@@ -9990,13 +10083,21 @@ async function showCloseTripModal(tripId) {
       <div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
         📎 Acknowledged Waybill — COMPULSORY (up to 4 documents)
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        ${[1,2,3,4].map(i=>`
-        <div>
-          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:4px">Document ${i}${i===1?' *':' (optional)'}</label>
-          <input type="file" id="ct-doc-${i}" accept="image/*,application/pdf" class="form-input" style="padding:6px;font-size:11px">
-        </div>`).join('')}
+      <!-- Drop zone -->
+      <div id="ct-wb-dropzone"
+           style="border:2px dashed rgba(239,68,68,.3);border-radius:8px;padding:16px;text-align:center;cursor:pointer;transition:border-color .2s;margin-bottom:8px"
+           onclick="el('ct-wb-input').click()"
+           ondragover="event.preventDefault();this.style.borderColor='var(--red)'"
+           ondragleave="this.style.borderColor='rgba(239,68,68,.3)'"
+           ondrop="handleWaybillDrop(event,'ct-wb-files','ct-wb-dropzone')">
+        <i class="ti ti-cloud-upload" style="font-size:24px;color:var(--red);display:block;margin-bottom:4px"></i>
+        <div style="font-size:12px;color:var(--text2)">Click to select or drag &amp; drop acknowledged waybills</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:2px">Attach as many documents as needed</div>
       </div>
+      <input type="file" id="ct-wb-input" accept="image/*,application/pdf" multiple
+             style="display:none" onchange="addWaybillFiles(this,'ct-wb-files','ct-wb-dropzone')">
+      <!-- File list -->
+      <div id="ct-wb-files" style="display:flex;flex-direction:column;gap:6px"></div>
     </div>
 
     <!-- DEBIT RECORD -->
@@ -10059,9 +10160,10 @@ function toggleDebitFields() {
 
 async function submitCloseTrip(tripId) {
   // 1. Check acknowledged waybill attached
-  const doc1 = el('ct-doc-1')?.files?.[0];
-  if (!doc1) {
-    alert('Please attach at least one acknowledged waybill document to close this trip.');
+  const ctFiles = _waybillFiles['ct-wb-files'] || [];
+  if (ctFiles.length === 0) {
+    showToast('Please attach the acknowledged waybill before closing this trip', 'error');
+    document.getElementById('ct-wb-dropzone')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;
   }
 
@@ -10074,15 +10176,8 @@ async function submitCloseTrip(tripId) {
     return;
   }
 
-  // 3. Convert closing docs to base64
-  const closingDocs = [];
-  for (let i=1; i<=4; i++) {
-    const f = el(`ct-doc-${i}`)?.files?.[0];
-    if (f) {
-      const b64 = await fileToBase64(f);
-      closingDocs.push({ name: f.name, type: f.type, data: b64 });
-    }
-  }
+  // 3. Collect all closing waybill docs
+  const closingDocs = await getWaybillDocs('ct-wb-files');
 
   const payload = {
     trip_status: 'closed',
@@ -10270,33 +10365,32 @@ async function showNewTrip() {
 
     <!-- ─── LOADING WAYBILL ATTACHMENT ────────────────── -->
     <div style="background:rgba(239,68,68,.06);border:1.5px dashed rgba(239,68,68,.4);border-radius:10px;padding:14px;margin:4px 0 12px">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
-        <i class="ti ti-file-upload" style="color:var(--red);font-size:16px"></i>
-        <span style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px">
-          Loading Waybill — Required before truck leaves (up to 4 documents)
-        </span>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+        <div style="display:flex;align-items:center;gap:6px">
+          <i class="ti ti-file-upload" style="color:var(--red);font-size:16px"></i>
+          <span style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.5px">
+            Loading Waybill * — Required before truck leaves
+          </span>
+        </div>
+        <span style="font-size:10px;color:var(--text3)">Max 10MB per file · image or PDF</span>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div>
-          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:4px">Document 1 *</label>
-          <input type="file" id="nt-wb-1" accept="image/*,application/pdf" class="form-input" style="padding:6px;font-size:11px">
-        </div>
-        <div>
-          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:4px">Document 2 (optional)</label>
-          <input type="file" id="nt-wb-2" accept="image/*,application/pdf" class="form-input" style="padding:6px;font-size:11px">
-        </div>
-        <div>
-          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:4px">Document 3 (optional)</label>
-          <input type="file" id="nt-wb-3" accept="image/*,application/pdf" class="form-input" style="padding:6px;font-size:11px">
-        </div>
-        <div>
-          <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:4px">Document 4 (optional)</label>
-          <input type="file" id="nt-wb-4" accept="image/*,application/pdf" class="form-input" style="padding:6px;font-size:11px">
-        </div>
+
+      <!-- Drop zone -->
+      <div id="nt-wb-dropzone"
+           style="border:2px dashed rgba(239,68,68,.3);border-radius:8px;padding:16px;text-align:center;cursor:pointer;transition:border-color .2s;margin-bottom:8px"
+           onclick="el('nt-wb-input').click()"
+           ondragover="event.preventDefault();this.style.borderColor='var(--red)'"
+           ondragleave="this.style.borderColor='rgba(239,68,68,.3)'"
+           ondrop="handleWaybillDrop(event,'nt-wb-files','nt-wb-dropzone')">
+        <i class="ti ti-cloud-upload" style="font-size:24px;color:var(--red);display:block;margin-bottom:4px"></i>
+        <div style="font-size:12px;color:var(--text2)">Click to select or drag &amp; drop files here</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:2px">You can attach multiple waybill documents</div>
       </div>
-      <div style="font-size:10px;color:var(--text3);margin-top:8px">
-        <i class="ti ti-info-circle"></i> Snap or upload the loading waybill. This is mandatory — the trip cannot be saved without it.
-      </div>
+      <input type="file" id="nt-wb-input" accept="image/*,application/pdf" multiple
+             style="display:none" onchange="addWaybillFiles(this,'nt-wb-files','nt-wb-dropzone')">
+
+      <!-- File list -->
+      <div id="nt-wb-files" style="display:flex;flex-direction:column;gap:6px"></div>
     </div>
 
     <!-- ─── Loading + Destination ─────────────────────── -->
@@ -10701,6 +10795,9 @@ function showModal(title, body, size) {
   document.body.appendChild(d);
 }
 function closeModal() {
+  // Clear any staged waybill files when modal is dismissed
+  clearWaybillFiles('nt-wb-files');
+  clearWaybillFiles('ct-wb-files');
   const d = el('modal-overlay');
   if (d) d.remove();
 }
