@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; connect-src 'self' https://vmo-virtual-medessy-opps-backend-production.up.railway.app https://cdn.jsdelivr.net https://api.anthropic.com; worker-src 'self' blob:; frame-ancestors 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com https://js.pusher.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; connect-src 'self' https://vmo-virtual-medessy-opps-backend-production.up.railway.app https://cdn.jsdelivr.net https://api.anthropic.com wss://*.pusher.com https://*.pusher.com; worker-src 'self' blob:; frame-ancestors 'none';">
 <meta http-equiv="X-Content-Type-Options" content="nosniff">
 <meta http-equiv="X-Frame-Options" content="SAMEORIGIN">
 <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
@@ -1029,12 +1029,12 @@ async function api(method, path, body) {
       return;
     }
     // 403 — friendly permission message
-    if (r.status === 403) throw new Error("You don't have permission to do that.");
+    if (r.status === 403) throw new Error("You do not have permission to do that.");
     // 429 — rate limited
     if (r.status === 429) throw new Error('Too many requests — please wait a moment and try again.');
     // 500+ — server error without leaking internals
     if (r.status >= 500) throw new Error('Something went wrong on our end. Please try again.');
-    throw new Error(d.error || d.message || "That request didn't go through. Please try again.");
+    throw new Error(d.error || d.message || "That request did not go through. Please try again.");
   }
   if (method === 'GET') cache[key] = { data: d, ts: Date.now() };
   return d;
@@ -1238,7 +1238,7 @@ async function doLogin() {
         ? 'Your session expired. Please log in again.'
       : msg.includes('server')
         ? 'The server is temporarily unavailable. Please try again.'
-      : e.message || 'Something went wrong. Please try again.';
+      : e.message || 'Something went wrong on our end. Please try again.';
     renderLogin(friendlyMsg);
   }
 }
@@ -1340,7 +1340,7 @@ function navigate(p) {
   const titles = {dashboard:'Dashboard',issues:'Issues & Complaints',requests:'Payment Requests',fuel:'Fuel Requests',vehicles:'Vehicles',drivers:'Drivers',clients:'Clients',receivables:'Receivables',imprest:'Imprest Accounts',reservations:'Pool Cars',inventory:'Store',compliance:'Compliance',chat:'Team Chat',users:'Users',departments:'Departments',audit:'Audit Log',availability:'Fleet Availability',trips:'Trip Log',companies:'Companies & Units',history:'History & Export',maintenance:'Maintenance Tracker',meetings:'Meetings & Calls',balance:'Balance Sheet'};
   html('page-title', titles[p] || p);
   html('topbar-btn', '');
-  // Only show spinner if page isn't cached
+  // Only show spinner if page is not cached
   const cacheKey = 'GET' + {
     dashboard:'/api/analytics/dashboard', requests:'/api/requests',
     fuel:'/api/fuel', vehicles:'/api/vehicles', drivers:'/api/drivers',
@@ -1401,7 +1401,7 @@ async function loadPage(p) {
     html('page-content', `
       <div class="error-state">
         <div style="font-size:56px">${offline?'🔌':'⚠️'}</div>
-        <div style="font-size:17px;font-weight:700;color:var(--text)">${offline?'No connection':'Something went wrong — please try again'}</div>
+        <div style="font-size:17px;font-weight:700;color:var(--text)">${offline?'No connection':'Something went wrong on our end. Please try again.'}</div>
         <div style="font-size:13px;color:var(--text3);margin-bottom:8px">${e.message}</div>
         ${offline?'<div style="font-size:12px;color:var(--text3);margin-bottom:16px">The server may be waking up. Wait 30 seconds and retry.</div>':''}
         <button class="btn btn-primary" onclick="loadPage('${p}')"><i class="ti ti-refresh"></i> Retry</button>
@@ -1662,7 +1662,7 @@ async function pgDashboard() {
 
   // Load imprest low-balance alerts
   if (['super_admin','accounts','haulage_manager','operations_manager'].includes(user?.role)) {
-    loadImprestAlerts();
+    loadImprestAlerts().catch(e => console.warn('[Imprest alerts]', e.message));
   }
 
   // Load compliance alerts quietly in the background
@@ -1801,7 +1801,7 @@ async function pgRequests() {
                 `:'<span style="color:var(--text3);font-size:10px">—</span>'}
               </td>
             </tr>`;
-          }).join('') || `<tr><td colspan="13" style="padding:40px;text-align:center;color:var(--text3)">No payment requests yet</td></tr>`}
+          }).join('') || `<tr><td colspan="13" style="padding:40px;text-align:center;color:var(--text3)">No payment requests yet — use New Payment to get started yet</td></tr>`}
         </tbody>
         ${data.length?`
         <tfoot><tr style="background:var(--bg3);border-top:2px solid var(--border)">
@@ -1830,13 +1830,13 @@ function filterReqTable(status) {
 async function approveReq(id) {
   showConfirmModal('Approve Request', 'Approve this payment request?', async () => {
     try { clearCache(); await api('PATCH', `/api/requests/${id}/approve`); navigate('payments'); }
-    catch(e) { showToast(e.message || 'Could not approve request', 'error'); }
+    catch(e) { showToast(e.message || 'Approval failed — please refresh and try again.', 'error'); }
   });
 }
 async function declineReq(id) {
   showInputModal('Decline Payment Request', 'Enter reason for declining (required)', async (reason) => {
     try { clearCache(); await api('PATCH', `/api/requests/${id}/decline`, { reason }); navigate('payments'); }
-    catch(e) { showToast(e.message || 'Could not decline request', 'error'); }
+    catch(e) { showToast(e.message || 'Could not decline this request right now. Please try again.', 'error'); }
   });
 }
 async function payReq(id) {
@@ -1863,7 +1863,7 @@ async function maintenanceApprove(id) {
       await api('PATCH', `/api/requests/${id}/maintenance-approve`);
       navigate('payments');
       showToast('✅ Maintenance approved. Admin can now proceed to payment.', 'success');
-    } catch(e) { showToast(e.message || 'Could not approve', 'error'); }
+    } catch(e) { showToast(e.message || 'Approval could not be processed right now. Please try again.', 'error'); }
   });
 }
 
@@ -2358,7 +2358,7 @@ async function pgFuel() {
               </td>
             </tr>`).join('') || `
             <tr><td colspan="10" style="padding:40px;text-align:center;color:var(--text3)">
-              <i class="ti ti-gas-station" style="font-size:32px;display:block;margin-bottom:8px"></i>No fuel requests yet
+              <i class="ti ti-gas-station" style="font-size:32px;display:block;margin-bottom:8px"></i>No fuel requests yet — drivers can request fuel from their dashboard yet
             </td></tr>`}
         </tbody>
         ${data.length ? `
@@ -2414,11 +2414,11 @@ function filterFuelTable(status) {
   }
 }
 async function approveFuel(id) {
-  showConfirmModal('Approve Fuel Request', 'Approve this fuel request?', async () => { try { clearCache(); await api('PATCH', `/api/fuel/${id}/approve`); navigate('fuel'); } catch(e) { showToast(e.message||'Could not approve', 'error'); } }, { confirmLabel: 'Approve ✓' });
+  showConfirmModal('Approve Fuel Request', 'Approve this fuel request?', async () => { try { clearCache(); await api('PATCH', `/api/fuel/${id}/approve`); navigate('fuel'); } catch(e) { showToast(e.message||'Approval could not be processed right now. Please try again.', 'error'); } }, { confirmLabel: 'Approve ✓' });
 }
 async function declineFuel(id) {
   showInputModal('Decline Fuel Request', 'Enter reason for declining…', async (reason) => {
-    try { clearCache(); await api('PATCH', `/api/fuel/\${id}/decline`, { reason }); navigate('fuel'); } catch(e) { showToast(e.message || 'Could not decline request', 'error'); }
+    try { clearCache(); await api('PATCH', `/api/fuel/\${id}/decline`, { reason }); navigate('fuel'); } catch(e) { showToast(e.message || 'Could not decline this request right now. Please try again.', 'error'); }
   }, { message: 'Please provide a reason. The driver will be notified.' });
 }
 
@@ -5768,7 +5768,7 @@ async function submitReceivable() {
 async function confirmReceipt(id) {
   showConfirmModal('Confirm Receipt', 'Mark this payment as received?', async () => {
     try { clearCache(); await api('PATCH', `/api/receivables/${id}/confirm`); navigate('receivables'); }
-    catch(e) { showToast(e.message || 'Could not confirm receipt', 'error'); }
+    catch(e) { showToast(e.message || 'Could not confirm this receipt. Please try again.', 'error'); }
   });
 }
 
@@ -5799,10 +5799,28 @@ async function pgImprest() {
 
 
   const [accounts, retirements, vendors] = await Promise.all([
-    api('GET', '/api/imprest'),
+    api('GET', '/api/imprest').catch(() => null),
     api('GET', '/api/imprest/retirements').catch(() => []),
     api('GET', '/api/vendors').catch(() => []),
   ]);
+
+  // Graceful error state if imprest accounts fail to load
+  if (!accounts) {
+    html('page-content', `
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                  padding:60px 20px;text-align:center;gap:12px">
+        <div style="font-size:48px">💼</div>
+        <div style="font-weight:700;font-size:16px;color:var(--text)">Couldn't load imprest accounts</div>
+        <div style="font-size:13px;color:var(--text3);max-width:320px;line-height:1.6">
+          We had trouble connecting to the server. This is usually temporary —
+          please try again in a moment.
+        </div>
+        <button class="btn btn-primary" onclick="pgImprest()" style="margin-top:8px">
+          <i class="ti ti-refresh"></i> Retry
+        </button>
+      </div>`);
+    return;
+  }
 
   const petrolVendors = vendors.filter(v =>
     (v.vendor_type || v.type || '').toLowerCase().includes('petrol') ||
@@ -6205,7 +6223,7 @@ async function deleteLocation(id, name) {
     try {
       clearCache();
       await api('DELETE', `/api/store/locations/${id}`);
-      showToast('Location removed ✓', 'success');
+      showToast('Location removed. Inventory items here are unaffected.', 'success');
       pgLocations();
     } catch(e) { showToast(e.message, 'error'); }
   }, { danger: true });
@@ -6320,11 +6338,11 @@ async function saveLinkImprestUserDept(accountId) {
 
   try {
     await api('PATCH', `/api/imprest/${accountId}/link`, payload);
-    showToast('Account linked successfully ✅', 'success');
+    showToast('Account linked successfully! Changes will appear on the dashboard.', 'success');
     closeModal();
     pgImprest();
   } catch(e) {
-    showToast(e.message || 'Could not save link', 'error');
+    showToast(e.message || 'We could not save this link. Please try again.', 'error');
   }
 }
 
@@ -6414,7 +6432,7 @@ async function createPetrolStationImprest(vendorId, vendorName) {
       String(a.vendor_id) === String(vendorId) ||
       (a.name||'').toLowerCase().includes(vendorName.toLowerCase().slice(0,15))
     );
-    if (alreadyExists) return; // already exists, don't create another
+    if (alreadyExists) return; // already exists, do not create another
 
     const r = await api('POST','/api/imprest', {
       name: vendorName + ' — Fuel Float',
@@ -6659,7 +6677,7 @@ async function editPetrolRate(accountId, currentRate) {
     if (isNaN(newRate) || isNaN(newRate)) return;
   try {
     await api('PATCH', `/api/imprest/${accountId}`, { current_rate: parseFloat(newRate) });
-    showToast('Rate updated','success');
+    showToast('Fuel rate updated successfully.','success');
     clearCache();
     const rateDisplay = document.getElementById('ps-rate-display');
     if (rateDisplay) rateDisplay.textContent = '₦' + Number(newRate).toLocaleString();
@@ -6672,7 +6690,7 @@ async function editFundingEntry(accountId, historyId, currentAmount) {
     if (isNaN(newAmount) || isNaN(newAmount)) return;
   try {
     await api('PATCH', `/api/imprest/history/${historyId}`, { amount: parseFloat(newAmount) });
-    showToast('Funding entry updated','success');
+    showToast('Funding entry updated. The balance reflects the change.','success');
     clearCache();
     navigate('imprest');
   } catch(e) { showToast(e.message||'Failed to edit. May be outside 5-day window.', 'error'); }
@@ -8716,7 +8734,7 @@ async function pgMyTrips() {
       <i class="ti ti-plus"></i>
     </button>`);
 
-  // Show skeleton immediately — don't make driver stare at a blank screen
+  // Show skeleton immediately — do not make driver stare at a blank screen
   html('page-content', `
     <div class="stat-grid" style="margin-bottom:16px">
       ${[1,2,3].map(()=>`<div class="stat-card" style="min-height:72px;opacity:.4;animation:pulse 1.5s infinite"></div>`).join('')}
@@ -10020,7 +10038,7 @@ async function submitEditVendor(id) {
     clearCache();
     await api('PATCH', `/api/vendors/${id}`, payload);
     closeModal();
-    showToast('Vendor updated','success');
+    showToast('Vendor record updated.', 'success');
     navigate('vendors');
   } catch(e) { showToast(e.message||'Update failed', 'error'); }
 }
@@ -10535,7 +10553,7 @@ async function submitCloseTrip(tripId) {
     showToast('Trip closed ✅ Truck is now free for next load', 'success');
     navigate('trips');
   } catch(e) {
-    showToast(e.message || 'Could not close trip — please try again', 'error');
+    showToast(e.message || 'Trip closure failed. Please attach the closing waybill and try again.', 'error');
   }
 }
 
@@ -11355,7 +11373,7 @@ async function checkVisitorAccess() {
   const registered = sessionStorage.getItem('vmo_visitor_registered');
   if (registered || user) return; // already registered or logged in
 
-  // Check if they've registered before on this device
+  // Check if they have registered before on this device
   const prevReg = localStorage.getItem('vmo_visitor_info');
   if (prevReg) {
     // Re-log the visit silently (returning visitor)
@@ -12199,7 +12217,7 @@ function filterIssues(status) {
 }
 
 async function openIssue(id) {
-  showModal('Loading…', '<div class="loading-state" style="padding:30px"><div class="spinner"></div></div>');
+  showModal('Loading — just a moment…', '<div class="loading-state" style="padding:30px"><div class="spinner"></div></div>');
   try {
     const iss = await api('GET', `/api/issues/${id}`);
     // Mark read
@@ -12692,7 +12710,7 @@ async function deleteUserSA(id) {
         clearCache();
         await api('DELETE', `/api/users/${id}`, { reason });
         closeModal();
-        showToast('User account deleted', 'success');
+        showToast('User account permanently removed from the system.', 'success');
         navigate('users');
       } catch(e) { showToast(e.message || 'Delete failed', 'error'); }
     }, { danger: true });
@@ -12967,8 +12985,8 @@ async function resetUserPassword(id, name) {
     showConfirmModal('Confirm Password Reset', `Reset password for <strong>${name}</strong>?`, async () => {
       try {
         await api('PATCH', `/api/users/${id}/password`, { password: newPass });
-        showToast('Password updated successfully ✅', 'success');
-      } catch(e) { showToast(e.message || 'Could not update password', 'error'); }
+        showToast('Password changed! Please use the new password on your next login.', 'success');
+      } catch(e) { showToast(e.message || 'Password update failed. Please try again or contact your administrator.', 'error'); }
     });
   }, { password: true });
 }
@@ -14908,7 +14926,7 @@ async function renderCronScheduler() {
       <div style="background:var(--bg3);border-radius:12px;padding:18px;margin-bottom:20px;border:1px solid var(--border)">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
           <div><div style="font-size:14px;font-weight:700;color:var(--text)">⏰ Daily Entry Reminder</div>
-            <div style="font-size:11px;color:var(--text3);margin-top:2px">Reminds supervisors who haven't submitted by deadline</div></div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">Reminds supervisors who have not submitted by deadline</div></div>
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
             <input type="checkbox" id="daily-enabled" ${d.enabled!==false?'checked':''}
               style="width:16px;height:16px;accent-color:var(--accent)">
