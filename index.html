@@ -3817,6 +3817,7 @@ async function submitNewTrip() {
     clearCache();
     await api('POST', '/api/trips', payload);
     closeModal();
+    clearWaybillFiles('nt-wb-files');
     showToast('Trip logged — truck is now on the road 🚛', 'success');
     navigate('trips');
   } catch(e) {
@@ -9376,11 +9377,11 @@ function showTripDetailModal(id) {
     </div>
     ${loadDocs.length ? `<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:6px">📎 Loading Waybill Documents</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${loadDocs.map((d,i)=>`<a href="${d.data}" download="${d.name||'waybill_'+i}" class="btn btn-ghost btn-sm" style="font-size:11px"><i class="ti ti-download"></i> ${d.name||'Doc '+(i+1)}</a>`).join('')}
+        ${loadDocs.map((d,i)=>{const url=d.data?(d.data.startsWith('data:')?d.data:`data:${d.type||'application/octet-stream'};base64,${d.data}`):'#';return`<a href="${url}" download="${d.name||'waybill_'+(i+1)}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:11px"><i class="ti ti-download"></i> ${sanitise(d.name||'Doc '+(i+1))}</a>`;}).join('')}
       </div></div>` : '<div style="background:rgba(239,68,68,.08);border-radius:8px;padding:8px;margin-bottom:8px;font-size:12px;color:var(--red)">⚠ No loading waybill attached</div>'}
     ${closeDocs.length ? `<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:6px">✅ Closing (Acknowledged) Documents</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${closeDocs.map((d,i)=>`<a href="${d.data}" download="${d.name||'closing_'+i}" class="btn btn-ghost btn-sm" style="font-size:11px"><i class="ti ti-download"></i> ${d.name||'Doc '+(i+1)}</a>`).join('')}
+        ${closeDocs.map((d,i)=>{const url=d.data?(d.data.startsWith('data:')?d.data:`data:${d.type||'application/octet-stream'};base64,${d.data}`):'#';return`<a href="${url}" download="${d.name||'closing_'+(i+1)}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:11px"><i class="ti ti-download"></i> ${sanitise(d.name||'Doc '+(i+1))}</a>`;}).join('')}
       </div></div>` : ''}
     <div style="display:flex;gap:8px">
       ${t.trip_status!=='closed' ? `<button class="btn btn-success btn-sm" onclick="closeModal();showCloseTripModal(${id})"><i class="ti ti-circle-check"></i> Close Trip</button>` : ''}
@@ -9951,6 +9952,7 @@ async function submitNewTripEnforced() {
   try {
     clearCache();
     await api('POST', '/api/trips', payload);
+    clearWaybillFiles('nt-wb-files');
     closeModal();
     showToast('Trip logged — truck marked as Loading ✅','success');
     navigate('trips');
@@ -10059,9 +10061,14 @@ function clearWaybillFiles(listId) {
 
 
 function fileToBase64(file) {
-  return new Promise((res,rej) => {
+  return new Promise((res, rej) => {
     const reader = new FileReader();
-    reader.onload = e => res(e.target.result);
+    reader.onload = e => {
+      // Strip the "data:mime/type;base64," prefix — store pure base64
+      const result = e.target.result;
+      const b64 = result.includes(',') ? result.split(',')[1] : result;
+      res(b64);
+    };
     reader.onerror = rej;
     reader.readAsDataURL(file);
   });
@@ -10199,10 +10206,13 @@ async function submitCloseTrip(tripId) {
   try {
     clearCache();
     await api('PATCH', `/api/trips/${tripId}`, payload);
+    clearWaybillFiles('ct-wb-files');
     closeModal();
-    showToast('Trip closed ✅ Truck is now free for next load','success');
+    showToast('Trip closed ✅ Truck is now free for next load', 'success');
     navigate('trips');
-  } catch(e) { alert(e.message||'Failed to close trip'); }
+  } catch(e) {
+    showToast(e.message || 'Could not close trip — please try again', 'error');
+  }
 }
 
 // ── WAYBILL DOWNLOAD CENTRE ───────────────────────────────────────────────────
