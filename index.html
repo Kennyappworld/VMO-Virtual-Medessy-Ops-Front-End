@@ -1706,11 +1706,11 @@ function filterReqTable(status) {
 
 async function approveReq(id) {
   if (!confirm('Approve this request?')) return;
-  try { clearCache(); await api('PATCH', `/api/requests/${id}/approve`); navigate('requests'); } catch(e) { alert(e.message); }
+  try { clearCache(); await api('PATCH', `/api/requests/${id}/approve`); navigate('requests'); } catch(e) { showToast(e.message, 'info'); }
 }
 async function declineReq(id) {
   const reason = prompt('Decline reason (required):'); if (!reason) return;
-  try { clearCache(); await api('PATCH', `/api/requests/${id}/decline`, { reason }); navigate('requests'); } catch(e) { alert(e.message); }
+  try { clearCache(); await api('PATCH', `/api/requests/${id}/decline`, { reason }); navigate('requests'); } catch(e) { showToast(e.message, 'info'); }
 }
 async function payReq(id) {
   const imprests = await api('GET', '/api/imprest').catch(() => []);
@@ -1729,19 +1729,19 @@ async function payReq(id) {
 }
 async function maintenanceApprove(id) {
   const roles = ['super_admin','admin','operations_manager','haulage_manager','compliance'];
-  if (!roles.includes(user.role)) { alert('Only Operations Manager, Compliance, or Admin can approve maintenance requests'); return; }
+  if (!roles.includes(user.role)) { showToast('Only Operations Manager, Compliance, or Admin can approve maintenance requests', 'info'); return; }
   if (!confirm('Approve this maintenance request? This is an audited action.')) return;
   try {
     clearCache();
     await api('PATCH',`/api/requests/${id}/maintenance-approve`);
     navigate('requests');
-    alert('✅ Maintenance approved. Admin can now proceed to payment.');
-  } catch(e) { alert(e.message); }
+    showToast('✅ Maintenance approved. Admin can now proceed to payment.', 'success');
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function confirmPay(id) {
   const imp = el('pay-imp')?.value || null;
-  try { clearCache(); await api('PATCH', `/api/requests/${id}/pay`, { imprest_id: imp }); closeModal(); navigate('requests'); } catch(e) { alert(e.message); }
+  try { clearCache(); await api('PATCH', `/api/requests/${id}/pay`, { imprest_id: imp }); closeModal(); navigate('requests'); } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function showNewRequest() {
@@ -1957,7 +1957,7 @@ function checkBulkDuplicates() {
   saveBulkRowData();
   const rows = window._bulkRows || [];
   const valid = rows.filter(r => r.description && r.amount > 0);
-  if (valid.length === 0) { alert('Add at least one row with description and amount'); return; }
+  if (valid.length === 0) { showToast('Add at least one row with description and amount', 'info'); return; }
   
   // Check for duplicates within the batch
   const descAmts = {};
@@ -1985,7 +1985,7 @@ function checkBulkDuplicates() {
 async function submitBulkRequests() {
   saveBulkRowData();
   const rows = (window._bulkRows || []).filter(r => r.description && r.amount > 0);
-  if (rows.length === 0) { alert('No valid rows to submit'); return; }
+  if (rows.length === 0) { showToast('No valid rows to submit', 'info'); return; }
   
   const btn = document.querySelector('.modal .btn-primary');
   if (btn) { btn.textContent = `Submitting ${rows.length} requests…`; btn.disabled = true; }
@@ -2043,7 +2043,7 @@ async function submitRequest() {
       priority: el('nr-priority')?.value || 'normal',
     });
     closeModal(); navigate('requests');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ── FUEL ──────────────────────────────────────────────────────────────────────
@@ -2132,6 +2132,15 @@ async function pgFuelAnalytics() {
 
 async function pgFuel() {
   const activeTab = window._fuelTab || 'requests';
+  // Declare role check first — used in topbar template below
+  const isDriverRole = user?.role === 'driver';
+  // Show skeleton immediately so page feels instant
+  if (!document.getElementById('fuel-table')) {
+    html('page-content', `<div style="display:flex;flex-direction:column;gap:10px;padding:4px 0">
+      ${[1,2,3,4,5,6].map(()=>`<div class="skel-row" style="height:44px;border-radius:8px;background:var(--bg2);animation:pulse 1.4s ease-in-out infinite"></div>`).join('')}
+    </div>`);
+  }
+
   html('topbar-btn', `
     <div style="display:flex;gap:6px;align-items:center">
       ${!isDriverRole ? `<button class="btn btn-ghost btn-sm ${activeTab==='analytics'?'active':''}" onclick="window._fuelTab='analytics';pgFuel()" style="font-size:11px"><i class="ti ti-chart-line"></i> Analytics</button>` : ''}
@@ -2140,10 +2149,9 @@ async function pgFuel() {
 
   if (activeTab === 'analytics') { await pgFuelAnalytics(); return; }
 
-  // Drivers only see their own fuel requests
-  const isDriverRole = user.role === 'driver';
   // Drivers only ever see their own requests — enforced here and on the backend
   const data = await api('GET', isDriverRole ? `/api/fuel?driver_user_id=${user.id}` : '/api/fuel');
+  window._fuelData = data; // Cache for detail view
 
   const totals = {
     all: data.length,
@@ -2196,8 +2204,9 @@ async function pgFuel() {
           ${data.map((f,i) => `
             <tr class="fuel-row" data-fstatus="${f.status}" data-amount="${f.amount||0}" data-qty="${f.quantity||0}"
                 data-search="${[f.ref_number,f.plate_number,f.driver_name,f.fuel_type,f.station_name,f.status].join(' ').toLowerCase()}"
-                style="border-bottom:1px solid var(--border);background:${i%2===0?'transparent':'rgba(255,255,255,.02)'};transition:.1s"
-                onmouseover="this.style.background='rgba(79,142,247,.06)'" onmouseout="this.style.background='${i%2===0?'transparent':'rgba(255,255,255,.02)'}'">
+                style="border-bottom:1px solid var(--border);background:${i%2===0?'transparent':'rgba(255,255,255,.02)'};transition:.1s;cursor:pointer"
+                onmouseover="this.style.background='rgba(79,142,247,.06)'" onmouseout="this.style.background='${i%2===0?'transparent':'rgba(255,255,255,.02)'}'"
+                onclick="viewFuelDetails(${f.id})">
               <td style="padding:9px 12px;font-family:monospace;color:var(--accent);font-size:11px;white-space:nowrap">${f.ref_number||'—'}</td>
               <td style="padding:9px 12px;color:var(--text3);white-space:nowrap;font-size:11px">${fmtDate(f.created_at)}</td>
               <td style="padding:9px 12px;font-weight:600;color:var(--text);white-space:nowrap">${f.plate_number||'—'}</td>
@@ -2278,12 +2287,86 @@ function filterFuelTable(status) {
 }
 async function approveFuel(id) {
   if (!confirm('Approve fuel request?')) return;
-  try { clearCache(); await api('PATCH', `/api/fuel/${id}/approve`); navigate('fuel'); } catch(e) { alert(e.message); }
+  try { clearCache(); await api('PATCH', `/api/fuel/${id}/approve`); navigate('fuel'); } catch(e) { showToast(e.message, 'info'); }
 }
 async function declineFuel(id) {
   const reason = prompt('Decline reason:'); if (!reason) return;
-  try { clearCache(); await api('PATCH', `/api/fuel/${id}/decline`, { reason }); navigate('fuel'); } catch(e) { alert(e.message); }
+  try { clearCache(); await api('PATCH', `/api/fuel/${id}/decline`, { reason }); navigate('fuel'); } catch(e) { showToast(e.message, 'info'); }
 }
+
+async function viewFuelDetails(id) {
+  // Find the record from the cached page data, or fetch individually
+  const cached = (window._fuelData || []).find(f => f.id === id);
+  const f = cached || await api('GET', `/api/fuel/${id}`).catch(() => null);
+  if (!f) { showToast('Could not load fuel request details', 'error'); return; }
+
+  const canApprove = ['super_admin','admin','haulage_manager','operations_manager','accounts'].includes(user?.role);
+  const statusColour = {
+    pending: 'var(--amber)', approved: 'var(--green)',
+    paid: 'var(--accent)', declined: 'var(--red)', cancelled: 'var(--text3)'
+  }[f.status] || 'var(--text)';
+
+  showModal(`⛽ Fuel Request — ${f.ref_number || '#'+id}`, `
+    <!-- Status banner -->
+    <div style="text-align:center;padding:10px;background:${statusColour}18;border:1px solid ${statusColour}40;border-radius:10px;margin-bottom:16px">
+      <div style="font-size:22px;font-weight:800;color:${statusColour};text-transform:uppercase;letter-spacing:1px">${f.status || '—'}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px">${f.ref_number || ''} · ${f.created_at ? new Date(f.created_at).toLocaleString('en-GB') : '—'}</div>
+    </div>
+
+    <!-- Details grid -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+      ${[
+        ['Driver', f.driver_name || '—'],
+        ['Vehicle Plate', f.plate_number || '—'],
+        ['Fuel Type', f.fuel_type || '—'],
+        ['Quantity (L)', f.quantity ? (+f.quantity).toLocaleString() : '—'],
+        ['Unit Price', f.unit_price ? fmt(f.unit_price)+'/L' : '—'],
+        ['Total Amount', fmt(f.amount)],
+        ['Petrol Station', f.station_name || '—'],
+        ['Route / Destination', f.destination || f.route || '—'],
+        ['Requested By', f.requester_name || '—'],
+        ['Approved By', f.approved_by_name || (f.approved_by ? '#'+f.approved_by : '—')],
+      ].map(([l,v]) => `
+        <div style="background:var(--bg2);border-radius:8px;padding:9px">
+          <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">${l}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">${sanitise(String(v))}</div>
+        </div>`).join('')}
+    </div>
+
+    ${f.notes || f.rejection_reason ? `
+      <div style="background:var(--bg2);border-radius:8px;padding:10px;margin-bottom:12px;font-size:13px;color:var(--text2)">
+        <span style="font-size:10px;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:4px">
+          ${f.rejection_reason ? '❌ Decline Reason' : '📝 Notes'}
+        </span>
+        ${sanitise(f.rejection_reason || f.notes || '')}
+      </div>` : ''}
+
+    <!-- Action buttons -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${f.status === 'pending' && canApprove ? `
+        <button class="btn btn-success" style="flex:1" onclick="closeModal();approveFuel(${id})">
+          <i class="ti ti-check"></i> Approve
+        </button>
+        <button class="btn btn-danger" style="flex:1" onclick="closeModal();declineFuel(${id})">
+          <i class="ti ti-x"></i> Decline
+        </button>` : ''}
+      ${f.status === 'approved' && canApprove ? `
+        <button class="btn btn-primary" style="flex:1" onclick="closeModal();markFuelPaid(${id})">
+          <i class="ti ti-cash"></i> Mark as Paid
+        </button>` : ''}
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal()">Close</button>
+    </div>
+  `);
+}
+
+async function markFuelPaid(id) {
+  try {
+    await api('PATCH', `/api/fuel/${id}/approve`, { status: 'paid' });
+    showToast('Marked as paid ✅', 'success');
+    pgFuel();
+  } catch(e) { showToast(e.message || 'Could not update status', 'error'); }
+}
+
 async function showNewFuel(preShipment) {
   // Load petrol station vendors + drivers + vehicles for smart dropdowns
   const [vendors, drivers, vehicles] = await Promise.all([
@@ -2400,7 +2483,7 @@ async function deleteVehicleSA(id, plate) {
   try {
     await api('DELETE', `/api/vehicles/${id}`);
     clearCache(); showToast(`Vehicle ${plate} deleted`,'success'); navigate('vehicles');
-  } catch(e) { alert(e.message||'Delete failed'); }
+  } catch(e) { showToast(e.message||'Delete failed', 'error'); }
 }
 
 async function showDriverDetail(id) {
@@ -2437,7 +2520,7 @@ async function deleteDriverSA(id, name) {
   try {
     await api('DELETE', `/api/drivers/${id}`);
     clearCache(); showToast(`Driver ${name} deleted`,'success'); navigate('drivers');
-  } catch(e) { alert(e.message||'Delete failed'); }
+  } catch(e) { showToast(e.message||'Delete failed', 'error'); }
 }
 
 // ── ACCOUNTS BULK PAYMENT TEMPLATE ────────────────────────────────────────────
@@ -2472,11 +2555,11 @@ async function showUploadPaymentCSV() {
 
 function previewPaymentCSV() {
   const file = el('pay-csv-file')?.files?.[0];
-  if (!file) { alert('Please select a file first'); return; }
+  if (!file) { showToast('Please select a file first', 'info'); return; }
   const reader = new FileReader();
   reader.onload = e => {
     const lines = e.target.result.split('\n').filter(l => !l.startsWith('"//') && l.trim());
-    if (!lines.length) { alert('File appears empty or invalid'); return; }
+    if (!lines.length) { showToast('File appears empty or invalid', 'error'); return; }
     const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g,'').trim());
     const rows = lines.slice(1).map(l => {
       const vals = l.match(/(".*?"|[^,]+)(?=,|$)/g) || l.split(',');
@@ -2503,7 +2586,7 @@ function previewPaymentCSV() {
 async function submitPaymentCSV() {
   const headers = window._csvHeaders;
   const rows = window._csvRows;
-  if (!rows?.length) { alert('Please preview the file first'); return; }
+  if (!rows?.length) { showToast('Please preview the file first', 'info'); return; }
 
   const idx = k => headers.findIndex(h => h.toLowerCase()===k.toLowerCase());
   let ok = 0, fail = 0;
@@ -2609,7 +2692,7 @@ async function showUploadTrips() {
 
 function previewTripCSV() {
   const file = el('trip-csv-file')?.files?.[0];
-  if (!file) { alert('Select a file first'); return; }
+  if (!file) { showToast('Select a file first', 'info'); return; }
   const reader = new FileReader();
   reader.onload = e => {
     const lines = e.target.result.split('\n').filter(l => !l.startsWith('"//') && l.trim());
@@ -2630,7 +2713,7 @@ function previewTripCSV() {
 async function submitTripCSV() {
   const headers = window._tripCsvHeaders;
   const rows = window._tripCsvRows;
-  if (!rows?.length) { alert('Preview the file first'); return; }
+  if (!rows?.length) { showToast('Preview the file first', 'info'); return; }
   const idx = k => headers.findIndex(h => h.toLowerCase()===k.toLowerCase());
   let ok = 0, fail = 0;
   for (const row of rows) {
@@ -2727,7 +2810,7 @@ async function showUploadDrivers() {
 
 function previewDriverCSV() {
   const file = el('drv-csv')?.files?.[0];
-  if (!file) { alert('Select a file first'); return; }
+  if (!file) { showToast('Select a file first', 'info'); return; }
   const reader = new FileReader();
   reader.onload = e => {
     const lines = e.target.result.split('\n').filter(l => !l.startsWith('//') && l.trim());
@@ -2745,13 +2828,15 @@ function previewDriverCSV() {
 async function submitDriverCSV() {
   const headers = window._drvHeaders;
   const rows = window._drvRows;
-  if (!rows?.length) { alert('Preview the file first'); return; }
+  if (!rows?.length) { showToast('Preview the file first', 'info'); return; }
   const idx = k => headers.findIndex(h => h.toLowerCase()===k.toLowerCase());
   let ok = 0, fail = 0;
 
   // Load companies to resolve names to IDs
-  const companies = await api('GET','/api/companies').catch(()=>[]);
-  const vehicles = await api('GET','/api/vehicles').catch(()=>[]);
+  const [companies, vehicles] = await Promise.all([
+    api('GET','/api/companies').catch(()=>[]),
+    api('GET','/api/vehicles').catch(()=>[]),
+  ]);
 
   for (const row of rows) {
     const g = k => (row[idx(k)]||'').trim();
@@ -2842,7 +2927,7 @@ async function showUploadVehicles() {
 
 function previewVehicleCSV() {
   const file = el('veh-csv')?.files?.[0];
-  if (!file) { alert('Select a file first'); return; }
+  if (!file) { showToast('Select a file first', 'info'); return; }
   const reader = new FileReader();
   reader.onload = e => {
     const lines = e.target.result.split('\n').filter(l => !l.startsWith('//') && l.trim());
@@ -2860,7 +2945,7 @@ function previewVehicleCSV() {
 async function submitVehicleCSV() {
   const headers = window._vehHeaders;
   const rows = window._vehRows;
-  if (!rows?.length) { alert('Preview the file first'); return; }
+  if (!rows?.length) { showToast('Preview the file first', 'info'); return; }
   const idx = k => headers.findIndex(h => h.toLowerCase()===k.toLowerCase());
   let ok = 0, fail = 0;
   const companies = await api('GET','/api/companies').catch(()=>[]);
@@ -3737,7 +3822,7 @@ async function submitFuelV2() {
     closeModal();
     showToast('Request submitted for approval','success');
     navigate('fuel');
-  } catch(e) { alert(e.message||'Submit failed'); }
+  } catch(e) { showToast(e.message||'Submit failed', 'error'); }
 }
 async function submitNewTrip() {
   // ── Guard: loading waybill is required ──
@@ -3853,7 +3938,7 @@ function calcKmFuel() {
 
 function downloadPaymentTemplate() {
   const isAccounts = ['accounts','super_admin','real_admin','admin'].includes(user?.role);
-  if (!isAccounts) { alert('Only Accounts department can download the payment template.'); return; }
+  if (!isAccounts) { showToast('Only Accounts department can download the payment template.', 'info'); return; }
   const headers = [
     'description','category','amount_total','amount_to_pay','payment_type',
     'credit_terms','payee_name','bank_name','account_number','account_name',
@@ -3890,7 +3975,7 @@ function downloadPaymentTemplate() {
 
 function attachPaymentTemplate() { showUploadPaymentCSV(); }function attachPaymentTemplate() {
   const isAccounts = ['accounts','super_admin','real_admin','admin'].includes(user?.role);
-  if (!isAccounts) { alert('Only Accounts department can upload payment templates.'); return; }
+  if (!isAccounts) { showToast('Only Accounts department can upload payment templates.', 'info'); return; }
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.csv';
@@ -3899,7 +3984,7 @@ function attachPaymentTemplate() { showUploadPaymentCSV(); }function attachPayme
     if (!file) return;
     const text = await file.text();
     const lines = text.split('\n').filter(l => l.trim() && !l.trim().startsWith('//'));
-    if (lines.length < 2) { alert('No data rows found in template.'); return; }
+    if (lines.length < 2) { showToast('No data rows found in template.', 'info'); return; }
     const headers = lines[0].split(',').map(h=>h.trim().replace(/"/g,''));
     const rows = lines.slice(1).map(line => {
       const vals = line.match(/(".*?"|[^,]+|(?<=,)(?=,)|^(?=,)|(?<=,)$)/g) || line.split(',');
@@ -3908,7 +3993,7 @@ function attachPaymentTemplate() { showUploadPaymentCSV(); }function attachPayme
       return obj;
     }).filter(r => r.description && r.amount_total);
 
-    if (!rows.length) { alert('No valid rows found. Check the template format.'); return; }
+    if (!rows.length) { showToast('No valid rows found. Check the template format.', 'warning'); return; }
 
     // Check for duplicates within upload vs existing
     const existing = window._lastRequests || [];
@@ -4219,7 +4304,7 @@ async function uploadVehicleCSV() {
   }
   delete cache['GET/api/vehicles'];
   closeModal();
-  alert('Upload complete! ' + success + ' added' + (failed ? ', ' + failed + ' failed' : ''));
+  showToast('Upload complete! ' + success + ' added' + (failed ? ', ' + failed + ' failed' : ''), 'error');
   await pgVehicles();
 }
 
@@ -4321,7 +4406,7 @@ async function showVehicleDetail(plate) {
 
 function exportAssetAnalytics() {
   const data = window._analyticsData || [];
-  if (!data.length) { alert('No data to export'); return; }
+  if (!data.length) { showToast('No data to export', 'info'); return; }
   const headers = ['Plate','Category','Fuel Cost','Maintenance Cost','Total Cost','Fuel L','KM Tracked','Avg km/L','Cost per KM','Fill-ups','Requests'];
   const rows = [['VMO Fleet Asset Analytics'], ['Generated: ' + new Date().toLocaleString()], [], headers].concat(
     data.map(v => [v.plate_number, v.vehicle_category||'fleet', v.totalFuelCost.toFixed(2), v.totalMaintCost.toFixed(2), v.totalCost.toFixed(2), v.totalFuelLtrs.toFixed(0), v.totalKm.toFixed(0), v.avgKmL?v.avgKmL.toFixed(3):'', v.costPerKm?v.costPerKm.toFixed(0):'', v.fillCount, v.reqCount])
@@ -4366,7 +4451,7 @@ async function confirmReceipt(requestId, btn) {
   try {
     await api('PATCH', '/api/requests/' + requestId + '/confirm-receipt');
     if (btn) { btn.textContent = '\u2705 Confirmed'; btn.style.background = 'var(--green)'; }
-  } catch(e) { alert(e.message); if (btn) btn.disabled = false; }
+  } catch(e) { showToast(e.message, 'info'); if (btn) btn.disabled = false; }
 }
 
 async function requestReceipt(requestId, btn) {
@@ -4374,15 +4459,15 @@ async function requestReceipt(requestId, btn) {
   try {
     await api('POST', '/api/requests/' + requestId + '/request-receipt');
     if (btn) { btn.textContent = '\ud83d\udce9 Sent'; btn.style.background = 'var(--amber)'; }
-  } catch(e) { alert(e.message); if (btn) btn.disabled = false; }
+  } catch(e) { showToast(e.message, 'info'); if (btn) btn.disabled = false; }
 }
 
 function updateReceiptThreshold() {
   const val = parseFloat(el('threshold-input')?.value);
-  if (!val || val < 1000) { alert('Enter a valid threshold (min \u20a61,000)'); return; }
+  if (!val || val < 1000) { showToast('Enter a valid threshold (min \u20a61,000)', 'info'); return; }
   receiptThreshold = val;
   api('POST', '/api/settings/receipt-threshold', { threshold: val }).catch(() => {});
-  alert('\u2705 Threshold updated to ' + fmt(val));
+  showToast('\u2705 Threshold updated to ' + fmt(val), 'success');
 }
 
 // ── MONTHLY TRIP REPORT ───────────────────────────────────────────────────────
@@ -4402,8 +4487,8 @@ async function showMonthlyTripReport() {
 async function submitMonthlyReport() {
   const plate = el('mr-vehicle')?.value;
   const month = el('mr-month')?.value;
-  if (!plate) { alert('Select a vehicle'); return; }
-  if (!month) { alert('Select report month'); return; }
+  if (!plate) { showToast('Select a vehicle', 'info'); return; }
+  if (!month) { showToast('Select report month', 'info'); return; }
   try {
     await api('POST', '/api/fleet/monthly-report', {
       plate_number: plate, report_month: month,
@@ -4415,8 +4500,8 @@ async function submitMonthlyReport() {
       notes: el('mr-notes')?.value || '',
     });
     closeModal();
-    alert('\u2705 Monthly report submitted!');
-  } catch(e) { alert(e.message); }
+    showToast('\u2705 Monthly report submitted!', 'info');
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function pgVehicles() {
@@ -4745,8 +4830,8 @@ function setNextServiceDate() {
 async function submitConfirmService(id) {
   const svcDate = document.getElementById('svc-date')?.value;
   const nextDate = document.getElementById('svc-next')?.value;
-  if (!svcDate) { alert('Service date is required'); return; }
-  if (!nextDate) { alert('Next service date is required'); return; }
+  if (!svcDate) { showToast('Service date is required', 'error'); return; }
+  if (!nextDate) { showToast('Next service date is required', 'error'); return; }
 
   const payload = {
     last_service_date: svcDate,
@@ -4773,7 +4858,7 @@ async function submitConfirmService(id) {
     closeModal();
     showToast(`Service logged for ${(window._vehiclesData||[]).find(v=>v.id===id)?.plate_number||'vehicle'}. Next due: ${fmtDate(nextDate)}`, 'success');
     navigate('vehicles');
-  } catch(e) { alert('Could not save: ' + e.message); }
+  } catch(e) { showToast('Could not save: ' + e.message, 'error'); }
 }
 
 
@@ -4876,7 +4961,7 @@ async function submitVehicle() {
     await api('POST', '/api/vehicles', payload);
     closeModal();
     navigate('vehicles');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ── DRIVERS ───────────────────────────────────────────────────────────────────
@@ -4983,7 +5068,7 @@ function showNewDriver() {
 }
 async function submitDriver() {
   try { clearCache(); await api('POST', '/api/drivers', { full_name: el('nd-name').value, phone: el('nd-phone').value, license_number: el('nd-lic').value,
-      license_class: el('nd-lclass')?.value||'', license_expiry: el('nd-licexp').value||null, bank_name: el('nd-bank').value, account_number: el('nd-acct').value, account_name: el('nd-aname').value, depot: el('nd-depot').value }); closeModal(); navigate('drivers'); } catch(e) { alert(e.message); }
+      license_class: el('nd-lclass')?.value||'', license_expiry: el('nd-licexp').value||null, bank_name: el('nd-bank').value, account_number: el('nd-acct').value, account_name: el('nd-aname').value, depot: el('nd-depot').value }); closeModal(); navigate('drivers'); } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ── COMPLIANCE ────────────────────────────────────────────────────────────────
@@ -5209,7 +5294,7 @@ async function submitComplianceDoc() {
     coverage_amount: el('ncd-coverage')?.value || null,
     notes: el('ncd-notes')?.value,
   };
-  if (!payload.doc_name || !payload.expiry_date) { alert('Document name and expiry date are required'); return; }
+  if (!payload.doc_name || !payload.expiry_date) { showToast('Document name and expiry date are required', 'error'); return; }
   try {
     await api('POST', '/api/compliance/documents', payload);
     closeModal();
@@ -5344,7 +5429,7 @@ async function submitClient() {
       designation: el('nc-desig')?.value,
     });
     closeModal(); navigate('clients');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 function showEditClient(id) {
@@ -5381,7 +5466,7 @@ async function submitEditClient(id) {
       designation: el('ec-desig')?.value,
     });
     closeModal(); showToast('Client updated','success'); navigate('clients');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 
@@ -5546,11 +5631,11 @@ function showNewReceivable() {
     </div>`);
 }
 async function submitReceivable() {
-  try { clearCache(); await api('POST', '/api/receivables', { client_id: el('nrv-client').value, invoice_number: el('nrv-inv').value, amount: el('nrv-amt').value, due_date: el('nrv-due').value, description: el('nrv-desc').value }); closeModal(); navigate('receivables'); } catch(e) { alert(e.message); }
+  try { clearCache(); await api('POST', '/api/receivables', { client_id: el('nrv-client').value, invoice_number: el('nrv-inv').value, amount: el('nrv-amt').value, due_date: el('nrv-due').value, description: el('nrv-desc').value }); closeModal(); navigate('receivables'); } catch(e) { showToast(e.message, 'info'); }
 }
 async function confirmReceipt(id) {
   if (!confirm('Confirm payment received?')) return;
-  try { clearCache(); await api('PATCH', `/api/receivables/${id}/confirm`); navigate('receivables'); } catch(e) { alert(e.message); }
+  try { clearCache(); await api('PATCH', `/api/receivables/${id}/confirm`); navigate('receivables'); } catch(e) { showToast(e.message, 'info'); }
 }
 
 
@@ -6072,7 +6157,7 @@ async function showImprestIssuanceLog(accountId, vendorName) {
 
 async function submitImprest() {
   const name = el('ni-name')?.value?.trim();
-  if (!name) { alert('Account name required'); return; }
+  if (!name) { showToast('Account name required', 'error'); return; }
   try {
     clearCache();
     await api('POST', '/api/imprest', {
@@ -6085,7 +6170,7 @@ async function submitImprest() {
       original_balance: el('ni-bal')?.value || 0,
     });
     closeModal(); navigate('imprest');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 
@@ -6122,7 +6207,7 @@ async function createPetrolStationImprest(vendorId, vendorName) {
     });
     showToast('Imprest account created for ' + vendorName, 'success');
     showPetrolImprestDetail(r, vendorName);
-  } catch(e) { alert(e.message||'Failed to create imprest'); }
+  } catch(e) { showToast(e.message||'Failed to create imprest', 'error'); }
 }
 
 async function showPetrolImprestDetail(account, vendorName) {
@@ -6217,8 +6302,10 @@ async function showPetrolImprestDetail(account, vendorName) {
 async function topUpPetrolImprest(accountId, vendorName) {
   closeModal();
   // Load current rates from vendor if available
-  const vendors = await api('GET', '/api/vendors').catch(() => []);
-  const acc = await api('GET', '/api/imprest').catch(() => []);
+  const [vendors, acc] = await Promise.all([
+    api('GET', '/api/vendors').catch(() => []),
+    api('GET', '/api/imprest').catch(() => []),
+  ]);
   const account = acc.find(a => a.id === accountId) || {};
   const vendor = vendors.find(v => v.id == account.linked_vendor_id) || {};
 
@@ -6355,7 +6442,7 @@ async function editPetrolRate(accountId, currentRate) {
     clearCache();
     const rateDisplay = document.getElementById('ps-rate-display');
     if (rateDisplay) rateDisplay.textContent = '₦' + Number(newRate).toLocaleString();
-  } catch(e) { alert(e.message||'Failed to update rate'); }
+  } catch(e) { showToast(e.message||'Failed to update rate', 'error'); }
 }
 
 async function editFundingEntry(accountId, historyId, currentAmount) {
@@ -6366,7 +6453,7 @@ async function editFundingEntry(accountId, historyId, currentAmount) {
     showToast('Funding entry updated','success');
     clearCache();
     navigate('imprest');
-  } catch(e) { alert(e.message||'Failed to edit. May be outside 5-day window.'); }
+  } catch(e) { showToast(e.message||'Failed to edit. May be outside 5-day window.', 'error'); }
 }
 
 function showFundImprest(id, name) {
@@ -6382,7 +6469,7 @@ function showFundImprest(id, name) {
     </div>`);
 }
 async function submitFund(id) {
-  try { clearCache(); await api('PATCH', `/api/imprest/${id}/fund`, { amount: el('fi-amt')?.value, description: el('fi-desc')?.value, source: el('fi-source')?.value }); closeModal(); navigate('imprest'); } catch(e) { alert(e.message); }
+  try { clearCache(); await api('PATCH', `/api/imprest/${id}/fund`, { amount: el('fi-amt')?.value, description: el('fi-desc')?.value, source: el('fi-source')?.value }); closeModal(); navigate('imprest'); } catch(e) { showToast(e.message, 'info'); }
 }
 
 function showRetireImprest(id, name, balance) {
@@ -6461,8 +6548,8 @@ async function submitRetirement(accountId) {
   }).filter(e => e.desc && e.amount > 0);
   const total = expenses.reduce((s,e) => s + e.amount, 0);
   const purpose = el('ret-purpose')?.value?.trim();
-  if (!purpose) { alert('Purpose is required'); return; }
-  if (!expenses.length) { alert('Add at least one expense line'); return; }
+  if (!purpose) { showToast('Purpose is required', 'error'); return; }
+  if (!expenses.length) { showToast('Add at least one expense line', 'info'); return; }
   try {
     clearCache();
     await api('POST', `/api/imprest/${accountId}/retire`, {
@@ -6475,7 +6562,7 @@ async function submitRetirement(accountId) {
     closeModal();
     showToast('Retirement submitted — awaiting Accounts approval', 'success');
     navigate('imprest');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function approveRetirement(id) {
@@ -6484,7 +6571,7 @@ async function approveRetirement(id) {
     await api('PATCH', `/api/imprest/retirements/${id}/approve`);
     showToast('✅ Retirement approved', 'success');
     navigate('imprest');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function declineRetirement(id) {
@@ -6494,7 +6581,7 @@ async function declineRetirement(id) {
     await api('PATCH', `/api/imprest/retirements/${id}/decline`, { reason });
     showToast('Retirement declined', 'error');
     navigate('imprest');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function showImprestHistory(id, name) {
@@ -6549,7 +6636,7 @@ async function pgReservations() {
   `);
 }
 async function approveRes(id) {
-  try { clearCache(); await api('PATCH', `/api/reservations/${id}/approve`); navigate('reservations'); } catch(e) { alert(e.message); }
+  try { clearCache(); await api('PATCH', `/api/reservations/${id}/approve`); navigate('reservations'); } catch(e) { showToast(e.message, 'info'); }
 }
 function showNewReservation() {
   showModal('New Pool Car Reservation', `
@@ -6570,11 +6657,11 @@ function showNewReservation() {
 async function submitReservation() {
   try {
     const pveh = await api('GET', '/api/pool-vehicles').catch(() => []);
-    if (!pveh.length) { alert('No pool vehicles registered'); return; }
+    if (!pveh.length) { showToast('No pool vehicles registered', 'info'); return; }
     clearCache();
     await api('POST', '/api/reservations', { vehicle_id: pveh[0].id, start_date: el('nr2-start')?.value, end_date: el('nr2-end')?.value, client_name: el('nr2-client')?.value, client_phone: el('nr2-phone')?.value, purpose: el('nr2-purpose')?.value });
     closeModal(); navigate('reservations');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ── VIRTUAL STORE (Inventory — Enhanced) ──────────────────────────────────────
@@ -6739,7 +6826,7 @@ function calcInvValue() {
 
 async function submitInventory() {
   const name = el('inv-name')?.value?.trim();
-  if (!name) { alert('Item name required'); return; }
+  if (!name) { showToast('Item name required', 'error'); return; }
   try {
     clearCache();
     await api('POST', '/api/inventory', {
@@ -6750,7 +6837,7 @@ async function submitInventory() {
       specification: el('inv-spec')?.value,
     });
     closeModal(); navigate('inventory');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // Issue item = Stock Requisition Note (SRN)
@@ -6792,8 +6879,8 @@ function showIssueItem(id, name, unit) {
 async function submitIssueItem(id) {
   const qty = el('is-qty')?.value;
   const purpose = el('is-purpose')?.value?.trim();
-  if (!qty || parseFloat(qty) <= 0) { alert('Enter a valid quantity'); return; }
-  if (!purpose) { alert('Enter the purpose/usage reason'); return; }
+  if (!qty || parseFloat(qty) <= 0) { showToast('Enter a valid quantity', 'info'); return; }
+  if (!purpose) { showToast('Enter the purpose/usage reason', 'info'); return; }
   try {
     delete cache['GET/api/inventory'];
     await api('POST', `/api/inventory/${id}/issue`, {
@@ -6801,7 +6888,7 @@ async function submitIssueItem(id) {
       driver_id: el('is-driver')?.value||null, purpose, notes: el('is-notes')?.value,
     });
     closeModal(); navigate('inventory');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // Receive stock = Goods Received Note (GRN)
@@ -6875,9 +6962,9 @@ async function submitReceiveStock() {
   const itemId = el('rc-item')?.value;
   const qty = el('rc-qty')?.value;
   const supplier = el('rc-supplier')?.value?.trim();
-  if (!itemId) { alert('Select an item'); return; }
-  if (!qty || parseFloat(qty) <= 0) { alert('Enter quantity received'); return; }
-  if (!supplier) { alert('Enter supplier name'); return; }
+  if (!itemId) { showToast('Select an item', 'info'); return; }
+  if (!qty || parseFloat(qty) <= 0) { showToast('Enter quantity received', 'info'); return; }
+  if (!supplier) { showToast('Enter supplier name', 'info'); return; }
   try {
     clearCache();
     await api('PATCH', `/api/inventory/${itemId}/restock`, {
@@ -6888,7 +6975,7 @@ async function submitReceiveStock() {
     });
     closeModal(); navigate('inventory');
     showToast(`✅ GRN created — ${qty} units added`, 'success');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function showItemHistory(id, name) {
@@ -6943,14 +7030,14 @@ async function showItemHistory(id, name) {
 
 // Super admin soft-delete — reversible via audit trail
 async function softDeleteItem(id, name) {
-  if (!['real_admin','super_admin'].includes(user.role)) { alert('Only Super Admin can delete store items'); return; }
+  if (!['real_admin','super_admin'].includes(user.role)) { showToast('Only Super Admin can delete store items', 'info'); return; }
   const reason = prompt(`Reason for deleting "${name}" from store? This action is audited and reversible.`);
   if (!reason) return;
   try {
     await api('DELETE', `/api/inventory/${id}`, { reason });
     showToast(`"${name}" removed from store. Audit record retained.`, 'success');
     navigate('inventory');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function toggleDeletedItems() {
@@ -6989,7 +7076,7 @@ async function restoreItem(id, name) {
     await api('PATCH', `/api/inventory/${id}/restore`);
     showToast(`"${name}" restored to store`, 'success');
     navigate('inventory');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ── CHAT ──────────────────────────────────────────────────────────────────────
@@ -7212,7 +7299,7 @@ async function sendChatMsg() {
     });
     cancelReply();
     await loadChatGroup(activeGroupId);
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 function triggerFileUpload() {
@@ -7222,7 +7309,7 @@ function triggerFileUpload() {
   input.onchange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 5*1024*1024) { alert('Image must be under 5MB'); return; }
+    if (file.size > 5*1024*1024) { showToast('Image must be under 5MB', 'error'); return; }
     const reader = new FileReader();
     reader.onload = async (ev) => {
       const dataUrl = ev.target.result;
@@ -7237,7 +7324,7 @@ function triggerFileUpload() {
         el('chat-input').value = '';
         cancelReply();
         await loadChatGroup(activeGroupId);
-      } catch(err) { alert(err.message); }
+      } catch(err) { showToast(err.message, 'info'); }
     };
     reader.readAsDataURL(file);
   };
@@ -7309,16 +7396,16 @@ function showCreateGroup() {
 
 async function submitCreateGroup() {
   const name = el('cg-name')?.value.trim();
-  if (!name) { alert('Enter a group name'); return; }
+  if (!name) { showToast('Enter a group name', 'info'); return; }
   const checked = document.querySelectorAll('#cg-members input[type=checkbox]:checked');
   const members = Array.from(checked).map(cb => ({id: parseInt(cb.value), name: cb.dataset.name}));
-  if (!members.length) { alert('Select at least one member'); return; }
+  if (!members.length) { showToast('Select at least one member', 'info'); return; }
   try {
     clearCache();
     await api('POST', '/api/chat/groups', { name, members });
     closeModal();
     navigate('chat');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 function showDMUser() {
@@ -7356,7 +7443,7 @@ async function startDM(toUserId, toUserName) {
     activeGroupId = g.id;
     activeGroupName = g.name;
     navigate('chat');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ── USERS ─────────────────────────────────────────────────────────────────────
@@ -7393,7 +7480,7 @@ function showNewUser() {
     </div>`);
 }
 async function submitUser() {
-  try { clearCache(); await api('POST', '/api/users', { name: el('nu-name').value, email: el('nu-email').value, password: el('nu-pass').value, role: el('nu-role').value, department: el('nu-dept').value, depot: el('nu-depot').value }); closeModal(); navigate('users'); } catch(e) { alert(e.message); }
+  try { clearCache(); await api('POST', '/api/users', { name: el('nu-name').value, email: el('nu-email').value, password: el('nu-pass').value, role: el('nu-role').value, department: el('nu-dept').value, depot: el('nu-depot').value }); closeModal(); navigate('users'); } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ── HISTORY & EXPORT ─────────────────────────────────────────────────────────
@@ -7748,7 +7835,7 @@ function exportExcel(tab) {
     rows = (d.audit||[]).filter(isVisible).map(r => [fmtDate(r.created_at),fmtTime(r.created_at),r.actor_name||'System',r.action,r.entity||'',r.entity_id||'']);
   }
 
-  if (!rows.length) { alert('No data to export (check filters)'); return; }
+  if (!rows.length) { showToast('No data to export (check filters)', 'warning'); return; }
 
   // Build CSV (opens in Excel)
   const csvRows = [
@@ -8753,9 +8840,9 @@ async function submitInvoice() {
   const num = el('ni-num')?.value?.trim();
   const amt = el('ni-amt')?.value;
   const client = el('ni-client')?.value?.trim();
-  if (!num) { alert('Enter invoice number'); return; }
-  if (!client) { alert('Enter client name'); return; }
-  if (!amt || parseFloat(amt) <= 0) { alert('Enter amount'); return; }
+  if (!num) { showToast('Enter invoice number', 'info'); return; }
+  if (!client) { showToast('Enter client name', 'info'); return; }
+  if (!amt || parseFloat(amt) <= 0) { showToast('Enter amount', 'info'); return; }
   try {
     await api('POST', '/api/invoices', {
       invoice_number: num,
@@ -8771,7 +8858,7 @@ async function submitInvoice() {
     delete cache['GET/api/invoices'];
     closeModal();
     await pgInvoices();
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function markInvoiceReceived(id) {
@@ -8780,7 +8867,7 @@ async function markInvoiceReceived(id) {
     await api('PATCH', `/api/invoices/${id}/receive`);
     delete cache['GET/api/invoices'];
     await pgInvoices();
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ── BUDGET MODULE ─────────────────────────────────────────────────────────────
@@ -8908,17 +8995,17 @@ async function runSeed() {
   try {
     const d = await api('POST', '/api/admin/seed', {});
     clearCache();
-    alert('✅ Demo data loaded!\n\n' +
+    showToast('✅ Demo data loaded!\n\n' +
       'New users created (password: [REDACTED - Set via env]):\n' +
       '• kenneth@medessy.com (Super Admin)\n' +
       '• ethel@medessy.com (HR)\n' +
       '• chinedu@medessy.com (Accounts)\n' +
       '• fatima@medessy.com (Compliance)\n' +
       '• emeka@medessy.com (Operations)\n\n' +
-      'Also loaded: 10 drivers, 10 vehicles, 10 clients,\n10 payment requests, 10 fuel requests, 10 receivables,\n10 inventory items, 5 pool vehicles');
+      'Also loaded: 10 drivers, 10 vehicles, 10 clients,\n10 payment requests, 10 fuel requests, 10 receivables,\n10 inventory items, 5 pool vehicles', 'success');
     navigate('dashboard');
   } catch(e) {
-    alert('Seed failed: ' + e.message);
+    showToast('Seed failed: ' + e.message, 'error');
   }
 }
 
@@ -9024,7 +9111,7 @@ async function submitNewCompany() {
     clearCache();
     await api('POST','/api/companies',{name:el('nc-name').value,type:el('nc-type').value,diesel_price_per_litre:990});
     closeModal(); navigate('companies');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function manageCompanyVehicles(compId, compName) {
@@ -9067,15 +9154,15 @@ async function manageCompanyVehicles(compId, compName) {
 
 async function addVehicleToCompany(compId) {
   const vehId = el('add-veh-sel')?.value;
-  if (!vehId) return alert('Select a vehicle first');
+  if (!vehId) return showToast('Select a vehicle first', 'info');
   try { clearCache(); await api('POST',`/api/companies/${compId}/vehicles`,{vehicle_id:vehId});
-    closeModal(); navigate('companies'); } catch(e) { alert(e.message); }
+    closeModal(); navigate('companies'); } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function removeVehicleFromCompany(compId, vehId, compName) {
   if (!confirm('Remove this vehicle from the unit?')) return;
   try { clearCache(); await api('DELETE',`/api/companies/${compId}/vehicles/${vehId}`);
-    closeModal(); navigate('companies'); } catch(e) { alert(e.message); }
+    closeModal(); navigate('companies'); } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function manageCompanyDrivers(compId, compName) {
@@ -9106,15 +9193,15 @@ async function manageCompanyDrivers(compId, compName) {
 
 async function addDriverToCompany(compId) {
   const drvId = el('add-drv-sel')?.value;
-  if (!drvId) return alert('Select a driver first');
+  if (!drvId) return showToast('Select a driver first', 'info');
   try { clearCache(); await api('POST',`/api/companies/${compId}/drivers`,{driver_id:drvId});
-    closeModal(); navigate('companies'); } catch(e) { alert(e.message); }
+    closeModal(); navigate('companies'); } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function removeDriverFromCompany(compId, drvId, compName) {
   if (!confirm('Remove this driver from the unit?')) return;
   try { clearCache(); await api('DELETE',`/api/companies/${compId}/drivers/${drvId}`);
-    closeModal(); navigate('companies'); } catch(e) { alert(e.message); }
+    closeModal(); navigate('companies'); } catch(e) { showToast(e.message, 'info'); }
 }
 
 function updateDieselPrice(compId, compName, currentPrice) {
@@ -9138,8 +9225,8 @@ async function submitDieselPrice(compId) {
     clearCache();
     await api('PATCH',`/api/companies/${compId}/diesel-price`,{price:el('new-diesel').value,date:el('diesel-date').value});
     closeModal(); navigate('companies');
-    alert('✅ Diesel price updated and logged in audit trail');
-  } catch(e) { alert(e.message); }
+    showToast('✅ Diesel price updated and logged in audit trail', 'success');
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function showFixedCosts(compId, compName) {
@@ -9203,12 +9290,17 @@ async function saveFixedCosts(compId) {
       days_in_month:el('fc-days')?.value,
     });
     closeModal();
-    alert('✅ Fixed costs saved');
-  } catch(e) { alert(e.message); }
+    showToast('✅ Fixed costs saved', 'success');
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ── TRIP LOG ──────────────────────────────────────────────────────────────────
 async function pgTrips() {
+  // Show skeleton immediately — page feels instant
+  html('page-content', `<div style="display:flex;flex-direction:column;gap:10px;padding:4px 0">
+      ${Array(6).fill(0).map(()=>`<div style="height:52px;border-radius:10px;background:var(--bg2);animation:pulse 1.4s ease-in-out infinite"></div>`).join('')}
+    </div>`);
+
   const companies = await api('GET','/api/companies').catch(()=>[]);
   const defaultCompId = window._filterCompany || (companies[0]?.id||'');
   window._filterCompany = null; // reset
@@ -9392,7 +9484,7 @@ function showTripDetailModal(id) {
 
 function exportTrips() {
   const trips = window._currentTrips || [];
-  if (!trips.length) { alert('No trips to export'); return; }
+  if (!trips.length) { showToast('No trips to export', 'info'); return; }
   const headers = ['Date','Company','Plate No.','Driver','Customer Name','Phone','Area','Shipment No','Waybill No','Loading Site','Offloading Site','To KM','Return KM','Rate','Pallets','Outward Value','Return Value','BIT','Diesel (L)','Diesel Cost','Net Revenue','Availability','Reason','Notes','Logged By','Logged At'];
   const rows = trips.map(t => [
     fmtDate(t.trip_date),t.company_name,t.plate_number,t.driver_name,t.customer_name,
@@ -9552,7 +9644,7 @@ async function submitVendor() {
     cac_reference: el('nv-cac')?.value,
   };
   if (!payload.company_name || !payload.contact_person || !payload.phone) {
-    alert('Company name, contact person and phone are required'); return;
+    showToast('Company name, contact person and phone are required', 'error'); return;
   }
   try {
     clearCache();
@@ -9601,7 +9693,7 @@ async function submitVendor() {
     }
     closeModal();
     navigate('vendors');
-  } catch(e) { alert(e.message||'Failed to register vendor'); }
+  } catch(e) { showToast(e.message||'Failed to register vendor', 'error'); }
 }
 
 async function showVendorDetail(id) {
@@ -9698,7 +9790,7 @@ async function submitEditVendor(id) {
     closeModal();
     showToast('Vendor updated','success');
     navigate('vendors');
-  } catch(e) { alert(e.message||'Update failed'); }
+  } catch(e) { showToast(e.message||'Update failed', 'error'); }
 }
 
 // ── DEBIT SHEET PAGE ──────────────────────────────────────────────────────────
@@ -9825,7 +9917,7 @@ function showDebitDetail(id) {
 
 function exportDebitSheet() {
   const trips = window._debitTrips || [];
-  if (!trips.length) { alert('No data to export'); return; }
+  if (!trips.length) { showToast('No data to export', 'info'); return; }
   const headers = ['Date','Waybill No','Invoice No','Plate No','Driver','Company','Shipment No','From','Destination','Customer','Phone','Load Details','Supervisor','Gross Freight','Diesel L','Diesel Cost','Net Revenue'];
   const rows = trips.map(t => {
     const freight = (+t.outward_value||0)+(+t.return_value||0);
@@ -9890,14 +9982,14 @@ async function submitNewTripEnforced() {
   // 1. Check waybill document attached
   const doc1 = el('nt-waybill-doc-1')?.files?.[0];
   if (!doc1) {
-    alert('Please attach at least one loading waybill document before saving the trip.');
+    showToast('Please attach at least one loading waybill document before saving the trip.', 'info');
     return;
   }
 
   // 2. Check required fields
-  if (!el('nt-waybill')?.value) { alert('Waybill number is required'); return; }
-  if (!el('nt-cust')?.value) { alert('Customer name is required'); return; }
-  if (!el('nt-veh')?.value) { alert('Please select a vehicle'); return; }
+  if (!el('nt-waybill')?.value) { showToast('Waybill number is required', 'error'); return; }
+  if (!el('nt-cust')?.value) { showToast('Customer name is required', 'error'); return; }
+  if (!el('nt-veh')?.value) { showToast('Please select a vehicle', 'info'); return; }
 
   // 3. Check vehicle has no open trip
   const vehicleId = el('nt-veh')?.value;
@@ -9906,7 +9998,7 @@ async function submitNewTripEnforced() {
     const open = openTrips.find(t => t.trip_status && !['closed'].includes(t.trip_status));
     if (open) {
       const vName = user?.full_name || user?.name || 'User';
-      alert(`${vName}, please close out on the previous trip (${open.waybill_number||'#'+open.id}) by completing the trip details and debit record before loading this truck again.`);
+      showToast(`${vName}, please close out on the previous trip (${open.waybill_number||'#'+open.id}) by completing the trip details and debit record before loading this truck again.`, 'info');
       return;
     }
   } catch(e) {}
@@ -9956,7 +10048,7 @@ async function submitNewTripEnforced() {
     closeModal();
     showToast('Trip logged — truck marked as Loading ✅','success');
     navigate('trips');
-  } catch(e) { alert(e.message||'Failed to save trip'); }
+  } catch(e) { showToast(e.message||'Failed to save trip', 'error'); }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -10179,7 +10271,7 @@ async function submitCloseTrip(tripId) {
   const outval = el('ct-outval')?.value;
   const retval = el('ct-retval')?.value;
   if (!noDebit && !outval && !retval) {
-    alert('Please fill the debit values (outward value, return value etc.) or tick "No debit for this trip".');
+    showToast('Please fill the debit values (outward value, return value etc.) or tick "No debit for this trip".', 'info');
     return;
   }
 
@@ -10758,7 +10850,7 @@ function calcTripValues() {
 
 async function submitTrip() {
   const custName = el('nt-cust')?.value;
-  if (!custName) { alert('Customer name is required'); return; }
+  if (!custName) { showToast('Customer name is required', 'error'); return; }
   try {
     clearCache();
     await api('POST','/api/trips',{
@@ -10784,7 +10876,7 @@ async function submitTrip() {
       notes: el('nt-notes')?.value,
     });
     closeModal(); loadTripsForCompany();
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 
@@ -11264,7 +11356,7 @@ async function loadBalanceSheet() {
 }
 
 function exportBalanceSheet() {
-  alert('Balance sheet export — connects to your backend to generate Excel/PDF. API: GET /api/reports/balance-sheet?month=' + (el('bs-month')?.value || new Date().toISOString().slice(0,7)));
+  showToast('Balance sheet export — connects to your backend to generate Excel/PDF. API: GET /api/reports/balance-sheet?month=' + (el('bs-month')?.value || new Date().toISOString().slice(0,7)), 'info');
 }
 
 // ── MAINTENANCE TRACKER ───────────────────────────────────────────────────────
@@ -11361,7 +11453,7 @@ function applyMaintFilter() {
 function updateOdometer(id, val) {
   const v = (window._maintData||[]).find(x=>x.id===id); if (!v) return;
   const n = parseInt(val)||v.currentOdo;
-  if (n<v.lastOdo) { alert('Cannot be less than last service reading'); return; }
+  if (n<v.lastOdo) { showToast('Cannot be less than last service reading', 'error'); return; }
   v.currentOdo = n; v.status = getMaintStatus(v);
   pgMaintenance();
 }
@@ -11415,7 +11507,7 @@ function showNewMaintEntry() {
     </div>`);
 }
 function addMaintEntry() {
-  const plate = el('nm-plate')?.value?.trim(); if (!plate) { alert('Plate required'); return; }
+  const plate = el('nm-plate')?.value?.trim(); if (!plate) { showToast('Plate required', 'error'); return; }
   const v = {id:Date.now(),plate,driver:el('nm-driver')?.value||'Unassigned',location:el('nm-loc')?.value||'Lagos',contract:el('nm-co')?.value||'Medessy',model:el('nm-model')?.value||'TATA LPT 1618',lastService:el('nm-date')?.value||new Date().toISOString().slice(0,10),lastOdo:parseInt(el('nm-lodo')?.value)||0,currentOdo:parseInt(el('nm-codo')?.value)||0};
   v.status = getMaintStatus(v);
   if (!window._maintData) window._maintData = [...MAINTENANCE_DATA];
@@ -11471,7 +11563,7 @@ async function pgAvailability() {
   }
   renderA(selYear,selMonth);
 }
-function exportAvailability(){ alert('Availability export: GET /api/availability/export?month='+new Date().toISOString().slice(0,7)); }
+function exportAvailability(){ showToast('Availability export: GET /api/availability/export?month='+new Date().toISOString().slice(0,7), 'info'); }
 
 // ── MEETINGS MODULE ───────────────────────────────────────────────────────────
 let _meetings = [
@@ -11532,7 +11624,7 @@ function showScheduleMeeting(){
 }
 function submitScheduleMeeting(){
   const title=el('sm-title')?.value?.trim();const date=el('sm-date')?.value;
-  if(!title||!date){alert('Title and date required');return;}
+  if(!title||!date){showToast('Title and date required', 'error');return;}
   _meetings.unshift({id:Date.now(),title,host:user?.full_name||user?.name||'Admin',scheduled:`${date}T${el('sm-time')?.value||'10:00'}:00`,duration:parseInt(el('sm-dur')?.value)||60,status:'upcoming',participants:[user?.full_name||user?.name||'Admin'],agenda:el('sm-agenda')?.value||''});
   closeModal();pgMeetings();
 }
@@ -11832,7 +11924,7 @@ async function resolveIssue(id) {
     closeModal();
     showToast('✅ Issue marked resolved', 'success');
     navigate('issues');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function reopenIssue(id) {
@@ -11841,7 +11933,7 @@ async function reopenIssue(id) {
     closeModal();
     showToast('Issue reopened', 'success');
     navigate('issues');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 function showNewIssue() {
@@ -12002,11 +12094,11 @@ function showNewDepartment() {
 
 async function submitDept() {
   const name = document.getElementById('nd-name')?.value?.trim();
-  if (!name) { alert('Name required'); return; }
+  if (!name) { showToast('Name required', 'error'); return; }
   try {
     await api('POST', '/api/departments', { name, description: document.getElementById('nd-desc')?.value, color: document.getElementById('nd-color')?.value });
     closeModal(); navigate('departments');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 function editDepartment(id, name, desc, color) {
@@ -12023,11 +12115,11 @@ async function updateDept(id) {
   try {
     await api('PUT', `/api/departments/${id}`, { name: document.getElementById('ed-name')?.value, description: document.getElementById('ed-desc')?.value, color: document.getElementById('ed-color')?.value });
     closeModal(); navigate('departments');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 async function deleteDept(id, name) {
   if (!confirm(`Delete department "${name}"? Members will not be deleted.`)) return;
-  try { await api('DELETE', `/api/departments/${id}`); navigate('departments'); } catch(e) { alert(e.message); }
+  try { await api('DELETE', `/api/departments/${id}`); navigate('departments'); } catch(e) { showToast(e.message, 'info'); }
 }
 function filterUsersByDept(dept) { navigate('users'); }
 
@@ -12204,20 +12296,20 @@ function showEditUserFull(id) {
 }
 
 async function deleteUserSA(id) {
-  if (!['super_admin','real_admin'].includes(user?.role)) { alert('Only Super Admin can delete users.'); return; }
+  if (!['super_admin','real_admin'].includes(user?.role)) { showToast('Only Super Admin can delete users.', 'info'); return; }
   const allUsers = window._allUsersList || [];
   const target = allUsers.find(u => u.id === id);
-  if (['super_admin','real_admin'].includes(target?.role)) { alert('Super Admin accounts cannot be deleted.'); return; }
+  if (['super_admin','real_admin'].includes(target?.role)) { showToast('Super Admin accounts cannot be deleted.', 'error'); return; }
   if (!confirm(`Delete user "${target?.full_name || id}"?\nThis permanently removes their account and cannot be undone.`)) return;
   const reason = prompt('Enter reason for deletion (required for audit trail):');
-  if (!reason?.trim()) { alert('A reason is required.'); return; }
+  if (!reason?.trim()) { showToast('A reason is required.', 'error'); return; }
   try {
     clearCache();
     await api('DELETE', `/api/users/${id}`, { reason });
     closeModal();
     showToast('User account deleted', 'success');
     navigate('users');
-  } catch(e) { alert(e.message || 'Delete failed'); }
+  } catch(e) { showToast(e.message || 'Delete failed', 'error'); }
 }
 
 async function submitEditUserFull(id) {
@@ -12231,7 +12323,7 @@ async function submitEditUserFull(id) {
   const active = document.getElementById('euf-active')?.value === 'true';
   const pass = document.getElementById('euf-pass')?.value;
 
-  if (!name || !email) { alert('Name and email are required'); return; }
+  if (!name || !email) { showToast('Name and email are required', 'error'); return; }
 
   try {
     // Update main fields via reassign endpoint
@@ -12245,7 +12337,7 @@ async function submitEditUserFull(id) {
     closeModal();
     showToast('User updated successfully', 'success');
     navigate('users');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 function showManageRoles() {
@@ -12412,7 +12504,7 @@ async function confirmApproveSignup(id) {
         </button>` : ''}
       </div>
       <button class="btn btn-ghost btn-block" style="margin-top:8px" onclick="closeModal();navigate('users')">Done</button>`);
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function resendCredentials(userId, email) {
@@ -12426,7 +12518,7 @@ async function resendCredentials(userId, email) {
         : `New password: ${result.new_password} — delivery failed, share manually`,
       d.email || d.whatsapp ? 'success' : 'error'
     );
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function rejectSignup(id) {
@@ -12435,7 +12527,7 @@ async function rejectSignup(id) {
     await api('PATCH', `/api/signup-requests/${id}/reject`, { reason });
     showToast('Signup request rejected', 'error');
     navigate('users');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 function showEditUser(id, name, role, dept, depot) {
@@ -12478,17 +12570,17 @@ async function submitEditUser(id) {
     closeModal();
     showToast('User updated', 'success');
     navigate('users');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 async function resetUserPassword(id, name) {
   if (!confirm(`Reset password for ${name}?`)) return;
   const newPass = prompt('Enter new password (min 8 chars):');
-  if (!newPass || newPass.length < 8) { alert('Password too short'); return; }
+  if (!newPass || newPass.length < 8) { showToast('Password too short', 'info'); return; }
   try {
     await api('PATCH', `/api/users/${id}/password`, { password: newPass });
     showToast('Password updated', 'success');
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ── SIGNUP PAGE (rendered when URL hash is #signup) ──────────────────────────
@@ -13439,7 +13531,7 @@ async function saveNewStaffBus() {
     });
     if (typeof closeModal === 'function') closeModal();
     renderStaffBusEntry();
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -13490,7 +13582,7 @@ async function fetchAvailReview() {
   const start    = el('rev-start')?.value;
   const end      = el('rev-end')?.value;
   const contract = el('rev-contract')?.value;
-  if (!start || !end) { alert('Select both dates'); return; }
+  if (!start || !end) { showToast('Select both dates', 'info'); return; }
 
   html('avail-review-results', `<div style="text-align:center;padding:40px;color:var(--text3)">
     <i class="ti ti-loader" style="font-size:28px;animation:spin .8s linear infinite"></i>
@@ -13561,7 +13653,7 @@ async function fetchAvailReview() {
 }
 
 function exportAvailCSV() {
-  if (!reviewData?.vehicles?.length) { alert('Load a report first'); return; }
+  if (!reviewData?.vehicles?.length) { showToast('Load a report first', 'info'); return; }
   const rows = [
     ['Plate','Driver','Contract','Availability %','Available Days','Unavailable Days','Total KM','Trips','Fuel (L)'],
     ...reviewData.vehicles.map(v=>[v.plate,v.driver||'',v.contract_type||'',v.availability_pct||'',v.available_days,v.unavailable_days,Math.round(v.total_km||0),v.total_trips||0,v.total_diesel?Math.round(v.total_diesel):''])
@@ -13881,7 +13973,7 @@ async function checkConsecutiveLowPerformers(allFeedback, currentMonth, currentY
 }
 
 function exportMonthlyCSV() {
-  if (!reportData?.vehicles?.length) { alert('Generate a report first'); return; }
+  if (!reportData?.vehicles?.length) { showToast('Generate a report first', 'info'); return; }
   const rows = [
     ['Plate','Driver','Contract','Availability %','Trend','Available Days','N/A Days','KM','Trips','Top Reason'],
     ...reportData.vehicles.map(v=>[v.plate,v.driver||'',v.contract_type||'',v.availability_pct||'',v.trend!==null?v.trend+'%':'',v.available_days,v.unavailable_days,Math.round(v.km||0),v.trips||0,v.top_reason||''])
@@ -13894,13 +13986,13 @@ function exportMonthlyCSV() {
 }
 
 function downloadReportPDF() {
-  if (!reportData) { alert('Generate a report first'); return; }
+  if (!reportData) { showToast('Generate a report first', 'info'); return; }
   const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const f = reportData.fleet_summary;
   const pct = f.availability_pct;
   const pCol = pct>=90?'#10b981':pct>=70?'#f59e0b':'#ef4444';
   const w = window.open('','_blank');
-  if (!w) { alert('Allow pop-ups to download PDF'); return; }
+  if (!w) { showToast('Allow pop-ups to download PDF', 'info'); return; }
   w.document.write(`<!DOCTYPE html><html><head>
     <title>VMO Availability — ${monthNames[reportData.month-1]} ${reportData.year}</title>
     <style>
@@ -14112,7 +14204,7 @@ function filterMaintTable(searchVal) {
 
 function exportMaintCSV() {
   const vehicles = window._maintVehicles || [];
-  if (!vehicles.length) { alert('No data to export'); return; }
+  if (!vehicles.length) { showToast('No data to export', 'info'); return; }
   const rows = [
     ['Plate','Driver','Status','Current KM','Last Service KM','KM to Service','Last Service Date','Days to Service'],
     ...vehicles.map(v=>[
@@ -14183,7 +14275,7 @@ async function saveServiceUpdate(vehicleId) {
     if (typeof closeModal === 'function') closeModal();
     if (typeof showToast === 'function') showToast('🔧 Service record updated', 'success');
     renderMaintenanceDash();
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 function showAddVehicleServiceModal() {
@@ -14240,7 +14332,7 @@ async function saveNewVehicleMaint() {
     if (typeof closeModal === 'function') closeModal();
     if (typeof showToast === 'function') showToast('Vehicle added to maintenance tracker', 'success');
     renderMaintenanceDash();
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -14310,11 +14402,11 @@ async function addSubscription() {
   const email = el('sub-email')?.value?.trim();
   const name  = el('sub-name')?.value?.trim();
   const type  = el('sub-type')?.value;
-  if (!email) { alert('Email is required'); return; }
+  if (!email) { showToast('Email is required', 'error'); return; }
   try {
     await api('POST', '/api/availability/report-subscriptions', { email, name, report_type: type });
     renderSubscriptions();
-  } catch(e) { alert(e.message); }
+  } catch(e) { showToast(e.message, 'info'); }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
