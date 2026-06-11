@@ -1410,6 +1410,122 @@ async function loadPage(p) {
 }
 
 // ── DASHBOARD ────────────────────────────────────────────────────────────────
+
+// ── IMPREST LOW-BALANCE ALERT WIDGET ─────────────────────────────────────────
+async function loadImprestAlerts() {
+  const w = document.getElementById('imprest-alert-widget');
+  if (!w) return;
+
+  try {
+    const { alerts = [] } = await api('GET', '/api/imprest/alerts').catch(() => ({ alerts: [] }));
+    if (!alerts.length) { w.innerHTML = ''; return; }
+
+    const fmt = n => '₦' + Number(n || 0).toLocaleString('en-NG', { minimumFractionDigits: 0 });
+
+    w.innerHTML = `
+      <div class="card" style="border-left:3px solid var(--amber,#f59e0b);margin-bottom:14px;padding:14px 16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <i class="ti ti-alert-triangle" style="color:var(--amber,#f59e0b);font-size:18px"></i>
+          <span style="font-weight:700;font-size:14px;color:var(--text)">
+            ${alerts.length} Imprest Account${alerts.length > 1 ? 's' : ''} Require Top-Up
+          </span>
+          <span style="margin-left:auto;font-size:11px;color:var(--text3);cursor:pointer"
+            onclick="navigate('imprest')">View all →</span>
+        </div>
+
+        ${alerts.map(a => {
+          const isCritical = a.severity === 'critical';
+          const accentColor = isCritical ? 'var(--red,#ef4444)' : 'var(--amber,#f59e0b)';
+          const bgColor     = isCritical ? 'rgba(239,68,68,.07)' : 'rgba(245,158,11,.07)';
+
+          // Describe who/what this account serves
+          const linkedTo = a.linked_user_name
+            ? `Linked to: ${sanitise(a.linked_user_name)}`
+            : a.linked_department
+              ? `Department: ${sanitise(a.linked_department)}`
+              : a.vendor_name
+                ? `Vendor: ${sanitise(a.vendor_name)}`
+                : a.owner_name
+                  ? `Holder: ${sanitise(a.owner_name)}`
+                  : '';
+
+          // Impact statement based on what the account funds
+          const category = a.dedicated_category || a.sub_name || 'operations';
+          let impact = '';
+          if (/fuel|diesel|petrol/i.test(category))
+            impact = 'Trucks may be unable to load — fuel supply could halt.';
+          else if (/driver|allowance/i.test(category))
+            impact = 'Driver allowances may be delayed, affecting dispatch.';
+          else if (/maintenance|repair/i.test(category))
+            impact = 'Vehicle maintenance requests may be blocked.';
+          else if (/logistics|dispatch/i.test(category))
+            impact = 'Logistics operations may be disrupted.';
+          else
+            impact = `${sanitise(category)} spending may be blocked.`;
+
+          return `
+          <div style="background:${bgColor};border:1px solid ${accentColor}33;border-radius:10px;
+                      padding:12px 14px;margin-bottom:8px">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap">
+              <div style="flex:1;min-width:0">
+                <!-- Account name + severity badge -->
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
+                  <span style="font-size:14px;font-weight:700;color:var(--text)">${sanitise(a.name)}</span>
+                  ${a.sub_name ? `<span style="font-size:11px;color:var(--text3)">${sanitise(a.sub_name)}</span>` : ''}
+                  <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;
+                               background:${accentColor}22;color:${accentColor};text-transform:uppercase;letter-spacing:.5px">
+                    ${isCritical ? '🔴 Critical' : '⚠ Low'}  ${a.pct}% remaining
+                  </span>
+                </div>
+
+                <!-- Linked to -->
+                ${linkedTo ? `<div style="font-size:12px;color:var(--text3);margin-bottom:6px">
+                  <i class="ti ti-link" style="margin-right:4px"></i>${linkedTo}
+                </div>` : ''}
+
+                <!-- Balance bar -->
+                <div style="background:rgba(255,255,255,.08);border-radius:4px;height:6px;margin-bottom:8px;overflow:hidden">
+                  <div style="height:100%;width:${Math.min(100,a.pct)}%;background:${accentColor};border-radius:4px;transition:.4s"></div>
+                </div>
+
+                <!-- Numbers row -->
+                <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text2);margin-bottom:8px">
+                  <span>Balance: <strong style="color:${accentColor}">${fmt(a.balance)}</strong></span>
+                  ${a.avg_retirement > 0 ? `<span>Avg reimbursement: <strong>${fmt(a.avg_retirement)}</strong></span>` : ''}
+                  ${a.monthly_spend > 0 ? `<span>Monthly spend: <strong>${fmt(a.monthly_spend)}</strong></span>` : ''}
+                  ${a.days_left !== null ? `<span>Est. runway: <strong style="color:${accentColor}">${a.days_left} day${a.days_left !== 1 ? 's' : ''}</strong></span>` : ''}
+                </div>
+
+                <!-- Impact warning -->
+                <div style="font-size:12px;color:${accentColor};display:flex;align-items:flex-start;gap:6px">
+                  <i class="ti ti-alert-circle" style="flex-shrink:0;margin-top:1px"></i>
+                  <span><strong>Potential impact:</strong> ${impact}</span>
+                </div>
+              </div>
+
+              <!-- Top-up action -->
+              <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex-shrink:0">
+                <button class="btn btn-sm"
+                  style="background:${accentColor};color:#fff;border:none;font-size:12px;padding:6px 14px;
+                         border-radius:8px;cursor:pointer;white-space:nowrap"
+                  onclick="navigate('imprest');setTimeout(()=>showImprestTopUp(${a.id},'${sanitise(a.name).replace(/'/g,'')}'),500)">
+                  <i class="ti ti-plus"></i> Top Up
+                </button>
+                ${a.recommended_topup > 0 ? `
+                  <span style="font-size:10px;color:var(--text3);text-align:right">
+                    Suggested: ${fmt(a.recommended_topup)}
+                  </span>` : ''}
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+  } catch(e) {
+    console.error('[Imprest alerts widget]', e.message);
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function pgDashboard() {
   const dash = await api('GET', '/api/analytics/dashboard').catch(() => ({}));
   const allowed = allowedPages().map(p => p.id);
@@ -1535,12 +1651,18 @@ async function pgDashboard() {
     </div>` : ''}
 
     ${['super_admin','admin','real_admin'].includes(user.role) ? `<div id="access-log-widget"></div>` : ''}
+    <div id="imprest-alert-widget"></div>
     <div id="compliance-widget"></div>
   `);
 
   // For drivers — load personal alerts in background
   if (user.role === 'driver') {
     setTimeout(() => loadDriverAlerts(), 300);
+  }
+
+  // Load imprest low-balance alerts
+  if (['super_admin','accounts','haulage_manager','operations_manager'].includes(user?.role)) {
+    loadImprestAlerts();
   }
 
   // Load compliance alerts quietly in the background
@@ -5731,6 +5853,14 @@ async function pgImprest() {
               <div style="font-size:12px;color:var(--text3);margin-top:2px">
                 ${sanitise(acc.holder_name || acc.holder || 'null')} · ${sanitise(acc.bank_name || acc.bank || 'Cash')}
               </div>
+              ${(acc.linked_user_name || acc.linked_department) ? `
+              <div style="font-size:11px;color:var(--text3);margin-top:3px;display:flex;align-items:center;gap:6px">
+                <i class="ti ti-user-check" style="font-size:12px;color:var(--accent)"></i>
+                <span style="color:var(--accent)">
+                  ${acc.linked_user_name ? 'User: ' + sanitise(acc.linked_user_name) : ''}
+                  ${acc.linked_department ? 'Dept: ' + sanitise(acc.linked_department) : ''}
+                </span>
+              </div>` : ''}
               <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
                 <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:rgba(34,197,94,.15);color:#4ade80">${acc.status ? acc.status.toUpperCase() : 'ACTIVE'}</span>
                 <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:rgba(99,102,241,.15);color:#818cf8">${isFuelFloat ? 'FUEL FLOAT' : (acc.category ? acc.category.toUpperCase() : 'PERSONAL')}</span>
@@ -5768,6 +5898,9 @@ async function pgImprest() {
             ${isAdmin ? `
             <button class="btn btn-ghost btn-sm" onclick="showLinkImprestVendor(${acc.id},'${sanitise(acc.label||acc.name)}','${acc.linked_vendor_id || ''}')">
               <i class="ti ti-link"></i> ${acc.linked_vendor_id ? 'Re-link Vendor' : 'Link Vendor'}
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="showLinkImprestUserDept(${acc.id},'${sanitise(acc.label||acc.name)}','${sanitise(acc.linked_user_name||'')}','${sanitise(acc.linked_department||'')}')">
+              <i class="ti ti-user-plus"></i> ${acc.linked_user_name || acc.linked_department ? 'Re-link User/Dept' : 'Link User/Dept'}
             </button>` : ''}
           </div>
         </div>`;
@@ -6120,6 +6253,81 @@ async function showLinkImprestVendor(accountId, accountName, currentVendorId) {
     </div>
   `);
 }
+
+async function showLinkImprestUserDept(accountId, accountName, currentUser, currentDept) {
+  // Load users for the dropdown
+  const users = await api('GET', '/api/users').catch(() => []);
+
+  // Build department list from users (unique departments)
+  const depts = [...new Set(users.map(u => u.department).filter(Boolean))].sort();
+
+  showModal(`🔗 Link "${accountName}" — User / Department`, `
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6">
+      Link this imprest account to a specific user or department so it appears on their
+      dashboard and is tracked against their cost centre. Super Admin only.
+    </p>
+
+    <div class="form-group" style="margin-bottom:14px">
+      <label class="form-label">Link to Specific User</label>
+      <select class="form-input" id="liu-user">
+        <option value="">— No specific user —</option>
+        ${users.map(u => `<option value="${u.id}" ${currentUser && u.full_name === currentUser ? 'selected' : ''}>${sanitise(u.full_name || u.name)} (${sanitise(u.role)})</option>`).join('')}
+      </select>
+      <span style="font-size:11px;color:var(--text3);margin-top:4px;display:block">
+        The linked user will see top-up alerts for this account on their dashboard.
+      </span>
+    </div>
+
+    <div style="text-align:center;font-size:12px;color:var(--text3);margin:10px 0">— or —</div>
+
+    <div class="form-group" style="margin-bottom:16px">
+      <label class="form-label">Link to Department</label>
+      <select class="form-input" id="liu-dept">
+        <option value="">— No department —</option>
+        ${depts.map(d => `<option value="${d}" ${d === currentDept ? 'selected' : ''}>${sanitise(d)}</option>`).join('')}
+      </select>
+      <input class="form-input" id="liu-dept-custom" placeholder="Or type a new department name…"
+        style="margin-top:8px" value="${currentDept && !depts.includes(currentDept) ? currentDept : ''}">
+      <span style="font-size:11px;color:var(--text3);margin-top:4px;display:block">
+        All users in this department will be tracked against this account's spend.
+      </span>
+    </div>
+
+    <div style="background:rgba(79,142,247,.08);border:1px solid rgba(79,142,247,.2);
+                border-radius:8px;padding:10px 12px;margin-bottom:16px;font-size:12px;color:var(--text2)">
+      <i class="ti ti-info-circle" style="color:var(--accent);margin-right:6px"></i>
+      You can link to <strong>either</strong> a user or a department — not both.
+      If both are selected, the user takes priority.
+    </div>
+
+    <button class="btn btn-primary" style="width:100%" onclick="saveLinkImprestUserDept(${accountId})">
+      <i class="ti ti-check"></i> Save Link
+    </button>
+  `);
+}
+
+async function saveLinkImprestUserDept(accountId) {
+  const userId    = document.getElementById('liu-user')?.value || null;
+  const deptSel   = document.getElementById('liu-dept')?.value || '';
+  const deptCustom= document.getElementById('liu-dept-custom')?.value?.trim() || '';
+  const dept = deptCustom || deptSel || null;
+
+  // User takes priority — if user selected, clear dept
+  const payload = {
+    linked_user_id:   userId || null,
+    linked_department: userId ? null : dept,
+  };
+
+  try {
+    await api('PATCH', `/api/imprest/${accountId}/link`, payload);
+    showToast('Account linked successfully ✅', 'success');
+    closeModal();
+    pgImprest();
+  } catch(e) {
+    showToast(e.message || 'Could not save link', 'error');
+  }
+}
+
 
 async function saveLinkImprestVendor(accountId) {
   const vendorId = el('lv-vendor')?.value || null;
