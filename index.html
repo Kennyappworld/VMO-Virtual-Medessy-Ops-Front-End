@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data: blob: https:; connect-src 'self' https://vmo-virtual-medessy-opps-backend-production.up.railway.app; frame-ancestors 'none';">
 <meta http-equiv="X-Content-Type-Options" content="nosniff">
 <meta http-equiv="X-Frame-Options" content="SAMEORIGIN">
 <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
@@ -976,14 +977,14 @@ function showToast(msg, type='info') {
 // ── STATE ────────────────────────────────────────────────────────────────────
 // ── STATE ─────────────────────────────────────────────────────────────────────
 // Security: validate stored token on load — clear if expired/corrupt
-let _rawToken = localStorage.getItem('vmo_token');
+let _rawToken = sessionStorage.getItem('vmo_token');
 let _rawUser  = null;
-try { _rawUser = JSON.parse(localStorage.getItem('vmo_user') || 'null'); } catch { _rawUser = null; }
+try { _rawUser = JSON.parse(sessionStorage.getItem('vmo_user') || 'null'); } catch { _rawUser = null; }
 
 // Invalidate if token is expired or user is missing
 if (isTokenExpired(_rawToken) && _rawToken) {
-  localStorage.removeItem('vmo_token');
-  localStorage.removeItem('vmo_user');
+  sessionStorage.removeItem('vmo_token');
+  sessionStorage.removeItem('vmo_user');
   _rawToken = null; _rawUser = null;
 }
 
@@ -1022,8 +1023,8 @@ async function api(method, path, body) {
     // Session expired — clear token and redirect to login
     if (r.status === 401) {
       token = null; user = null;
-      localStorage.removeItem('vmo_token');
-      localStorage.removeItem('vmo_user');
+      sessionStorage.removeItem('vmo_token');
+      sessionStorage.removeItem('vmo_user');
       render();
       return;
     }
@@ -1216,8 +1217,8 @@ async function doLogin() {
     user  = d.user;
     resetLoginRateLimit();
     if (isTokenExpired(token)) throw new Error('Received an expired session. Please try again.');
-    localStorage.setItem('vmo_token', token);
-    localStorage.setItem('vmo_user', JSON.stringify(user));
+    sessionStorage.setItem('vmo_token', token);
+    sessionStorage.setItem('vmo_user', JSON.stringify(user));
     page = 'dashboard';
     render();
     preloadAll();
@@ -1705,12 +1706,16 @@ function filterReqTable(status) {
 
 
 async function approveReq(id) {
-  if (!confirm('Approve this request?')) return;
-  try { clearCache(); await api('PATCH', `/api/requests/${id}/approve`); navigate('requests'); } catch(e) { showToast(e.message, 'info'); }
+  showConfirmModal('Approve Request', 'Approve this payment request?', async () => {
+    try { clearCache(); await api('PATCH', `/api/requests/${id}/approve`); navigate('payments'); }
+    catch(e) { showToast(e.message || 'Could not approve request', 'error'); }
+  });
 }
 async function declineReq(id) {
-  const reason = prompt('Decline reason (required):'); if (!reason) return;
-  try { clearCache(); await api('PATCH', `/api/requests/${id}/decline`, { reason }); navigate('requests'); } catch(e) { showToast(e.message, 'info'); }
+  showInputModal('Decline Payment Request', 'Enter reason for declining (required)', async (reason) => {
+    try { clearCache(); await api('PATCH', `/api/requests/${id}/decline`, { reason }); navigate('payments'); }
+    catch(e) { showToast(e.message || 'Could not decline request', 'error'); }
+  });
 }
 async function payReq(id) {
   const imprests = await api('GET', '/api/imprest').catch(() => []);
@@ -1730,13 +1735,14 @@ async function payReq(id) {
 async function maintenanceApprove(id) {
   const roles = ['super_admin','admin','operations_manager','haulage_manager','compliance'];
   if (!roles.includes(user.role)) { showToast('Only Operations Manager, Compliance, or Admin can approve maintenance requests', 'info'); return; }
-  if (!confirm('Approve this maintenance request? This is an audited action.')) return;
-  try {
-    clearCache();
-    await api('PATCH',`/api/requests/${id}/maintenance-approve`);
-    navigate('requests');
-    showToast('✅ Maintenance approved. Admin can now proceed to payment.', 'success');
-  } catch(e) { showToast(e.message, 'info'); }
+  showConfirmModal('Approve Maintenance', 'Approve this maintenance request? This is logged in the audit trail.', async () => {
+    try {
+      clearCache();
+      await api('PATCH', `/api/requests/${id}/maintenance-approve`);
+      navigate('payments');
+      showToast('✅ Maintenance approved. Admin can now proceed to payment.', 'success');
+    } catch(e) { showToast(e.message || 'Could not approve', 'error'); }
+  });
 }
 
 async function confirmPay(id) {
@@ -1977,7 +1983,7 @@ function checkBulkDuplicates() {
       warn.style.display = '';
       warn.innerHTML = `<strong>⚠ Possible Duplicates Detected:</strong><br>${dups.map(d=>`• ${sanitise(d)}`).join('<br>')}`;
     }
-    if (!confirm(`${dups.length} possible duplicate(s) found:\n${dups.join('\n')}\n\nSubmit anyway?`)) return;
+    // Duplicate warning handled inline — proceed
   }
   submitBulkRequests();
 }
@@ -2286,12 +2292,12 @@ function filterFuelTable(status) {
   }
 }
 async function approveFuel(id) {
-  if (!confirm('Approve fuel request?')) return;
-  try { clearCache(); await api('PATCH', `/api/fuel/${id}/approve`); navigate('fuel'); } catch(e) { showToast(e.message, 'info'); }
+  showConfirmModal('Approve Fuel Request', 'Approve this fuel request?', async () => { try { clearCache(); await api('PATCH', `/api/fuel/${id}/approve`); navigate('fuel'); } catch(e) { showToast(e.message||'Could not approve', 'error'); } }, { confirmLabel: 'Approve ✓' });
 }
 async function declineFuel(id) {
-  const reason = prompt('Decline reason:'); if (!reason) return;
-  try { clearCache(); await api('PATCH', `/api/fuel/${id}/decline`, { reason }); navigate('fuel'); } catch(e) { showToast(e.message, 'info'); }
+  showInputModal('Decline Fuel Request', 'Enter reason for declining…', async (reason) => {
+    try { clearCache(); await api('PATCH', `/api/fuel/\${id}/decline`, { reason }); navigate('fuel'); } catch(e) { showToast(e.message || 'Could not decline request', 'error'); }
+  }, { message: 'Please provide a reason. The driver will be notified.' });
 }
 
 async function viewFuelDetails(id) {
@@ -2479,11 +2485,12 @@ async function deleteVehicleSA(id, plate) {
   if (!['super_admin','real_admin','admin'].includes(user?.role)) {
     showToast('Only Super Admin can delete vehicles','error'); return;
   }
-  if (!confirm(`Permanently delete vehicle ${plate}?\n\nThis cannot be undone.`)) return;
-  try {
-    await api('DELETE', `/api/vehicles/${id}`);
-    clearCache(); showToast(`Vehicle ${plate} deleted`,'success'); navigate('vehicles');
-  } catch(e) { showToast(e.message||'Delete failed', 'error'); }
+  showConfirmModal('Delete Vehicle', `Permanently delete vehicle <strong>${plate}</strong>? This cannot be undone.`, async () => {
+    try {
+      await api('DELETE', `/api/vehicles/${id}`);
+      clearCache(); showToast(`Vehicle ${plate} deleted`, 'success'); navigate('vehicles');
+    } catch(e) { showToast(e.message || 'Delete failed', 'error'); }
+  }, { danger: true });
 }
 
 async function showDriverDetail(id) {
@@ -2516,11 +2523,12 @@ async function deleteDriverSA(id, name) {
   if (!['super_admin','real_admin','admin'].includes(user?.role)) {
     showToast('Only Super Admin can delete drivers','error'); return;
   }
-  if (!confirm(`Permanently delete driver ${name}?\n\nThis cannot be undone.`)) return;
-  try {
-    await api('DELETE', `/api/drivers/${id}`);
-    clearCache(); showToast(`Driver ${name} deleted`,'success'); navigate('drivers');
-  } catch(e) { showToast(e.message||'Delete failed', 'error'); }
+  showConfirmModal('Delete Driver', `Permanently delete driver <strong>${name}</strong>? This cannot be undone.`, async () => {
+    try {
+      await api('DELETE', `/api/drivers/${id}`);
+      clearCache(); showToast(`Driver ${name} deleted`, 'success'); navigate('drivers');
+    } catch(e) { showToast(e.message || 'Delete failed', 'error'); }
+  }, { danger: true });
 }
 
 // ── ACCOUNTS BULK PAYMENT TEMPLATE ────────────────────────────────────────────
@@ -4000,7 +4008,9 @@ function attachPaymentTemplate() { showUploadPaymentCSV(); }function attachPayme
     const existingDescs = existing.map(r=>(r.description||'').toLowerCase());
     const dupes = rows.filter(r => existingDescs.includes((r.description||'').toLowerCase()));
     if (dupes.length) {
-      const ok = confirm(`${dupes.length} possible duplicate(s) found:\n${dupes.map(d=>d.description).join(', ')}\n\nContinue anyway?`);
+      // Show duplicate warning as toast, let user proceed
+      showToast(`⚠ ${dupes.length} possible duplicate(s) detected — review before submitting`, 'warning');
+      const ok = true;
       if (!ok) return;
     }
 
@@ -5634,8 +5644,10 @@ async function submitReceivable() {
   try { clearCache(); await api('POST', '/api/receivables', { client_id: el('nrv-client').value, invoice_number: el('nrv-inv').value, amount: el('nrv-amt').value, due_date: el('nrv-due').value, description: el('nrv-desc').value }); closeModal(); navigate('receivables'); } catch(e) { showToast(e.message, 'info'); }
 }
 async function confirmReceipt(id) {
-  if (!confirm('Confirm payment received?')) return;
-  try { clearCache(); await api('PATCH', `/api/receivables/${id}/confirm`); navigate('receivables'); } catch(e) { showToast(e.message, 'info'); }
+  showConfirmModal('Confirm Receipt', 'Mark this payment as received?', async () => {
+    try { clearCache(); await api('PATCH', `/api/receivables/${id}/confirm`); navigate('receivables'); }
+    catch(e) { showToast(e.message || 'Could not confirm receipt', 'error'); }
+  });
 }
 
 
@@ -6056,13 +6068,14 @@ async function saveLocation(id) {
 }
 
 async function deleteLocation(id, name) {
-  if (!confirm(`Delete location "${name}"? This won't delete inventory items at this location.`)) return;
-  try {
-    clearCache();
-    await api('DELETE', `/api/store/locations/${id}`);
-    showToast('Location removed ✓', 'success');
-    pgLocations();
-  } catch(e) { showToast(e.message, 'error'); }
+  showConfirmModal('Delete Location', `Delete location "${name}"? Inventory items here will not be deleted.`, async () => {
+    try {
+      clearCache();
+      await api('DELETE', `/api/store/locations/${id}`);
+      showToast('Location removed ✓', 'success');
+      pgLocations();
+    } catch(e) { showToast(e.message, 'error'); }
+  }, { danger: true });
 }
 
 async function showLinkImprestVendor(accountId, accountName, currentVendorId) {
@@ -6434,8 +6447,8 @@ async function submitTopUp(accountId) {
 
 
 async function editPetrolRate(accountId, currentRate) {
-  const newRate = prompt('Enter new diesel/petrol rate (₦/L):', currentRate);
-  if (!newRate || isNaN(newRate)) return;
+  showInputModal('Update Fuel Rate', 'New rate per litre (₦)', async (newRate) => {
+    if (isNaN(newRate) || isNaN(newRate)) return;
   try {
     await api('PATCH', `/api/imprest/${accountId}`, { current_rate: parseFloat(newRate) });
     showToast('Rate updated','success');
@@ -6443,17 +6456,19 @@ async function editPetrolRate(accountId, currentRate) {
     const rateDisplay = document.getElementById('ps-rate-display');
     if (rateDisplay) rateDisplay.textContent = '₦' + Number(newRate).toLocaleString();
   } catch(e) { showToast(e.message||'Failed to update rate', 'error'); }
+  });
 }
 
 async function editFundingEntry(accountId, historyId, currentAmount) {
-  const newAmount = prompt('Edit funding amount (₦) — editable within 5 days only:', currentAmount);
-  if (!newAmount || isNaN(newAmount)) return;
+  showInputModal('Edit Funding Amount', 'New amount in ₦', async (newAmount) => {
+    if (isNaN(newAmount) || isNaN(newAmount)) return;
   try {
     await api('PATCH', `/api/imprest/history/${historyId}`, { amount: parseFloat(newAmount) });
     showToast('Funding entry updated','success');
     clearCache();
     navigate('imprest');
   } catch(e) { showToast(e.message||'Failed to edit. May be outside 5-day window.', 'error'); }
+  });
 }
 
 function showFundImprest(id, name) {
@@ -6566,22 +6581,23 @@ async function submitRetirement(accountId) {
 }
 
 async function approveRetirement(id) {
-  if (!confirm('Approve this retirement and authorise reimbursement?')) return;
+  showConfirmModal('Approve Retirement', 'Approve this retirement and authorise reimbursement?', async () => {
   try {
     await api('PATCH', `/api/imprest/retirements/${id}/approve`);
     showToast('✅ Retirement approved', 'success');
     navigate('imprest');
   } catch(e) { showToast(e.message, 'info'); }
+  });
 }
 
 async function declineRetirement(id) {
-  const reason = prompt('Reason for declining:');
-  if (!reason) return;
-  try {
-    await api('PATCH', `/api/imprest/retirements/${id}/decline`, { reason });
+  showInputModal('Decline Retirement', 'Reason for declining (required)', async (reason) => {
+    try {
+      await api('PATCH', `/api/imprest/retirements/${id}/decline`, { reason });
     showToast('Retirement declined', 'error');
     navigate('imprest');
   } catch(e) { showToast(e.message, 'info'); }
+  });
 }
 
 async function showImprestHistory(id, name) {
@@ -7031,13 +7047,14 @@ async function showItemHistory(id, name) {
 // Super admin soft-delete — reversible via audit trail
 async function softDeleteItem(id, name) {
   if (!['real_admin','super_admin'].includes(user.role)) { showToast('Only Super Admin can delete store items', 'info'); return; }
-  const reason = prompt(`Reason for deleting "${name}" from store? This action is audited and reversible.`);
-  if (!reason) return;
+  showInputModal(`Delete Store Item`, `Reason for deleting "${name}"? This is audited and reversible.`, async (reason) => {
+    if (!reason) return;
   try {
     await api('DELETE', `/api/inventory/${id}`, { reason });
     showToast(`"${name}" removed from store. Audit record retained.`, 'success');
     navigate('inventory');
   } catch(e) { showToast(e.message, 'info'); }
+  });
 }
 
 async function toggleDeletedItems() {
@@ -7071,12 +7088,13 @@ async function toggleDeletedItems() {
 }
 
 async function restoreItem(id, name) {
-  if (!confirm(`Restore "${name}" to active store?`)) return;
+  showConfirmModal('Restore Item', `Restore "<strong>${name}</strong>" to active store?`, async () => {
   try {
     await api('PATCH', `/api/inventory/${id}/restore`);
     showToast(`"${name}" restored to store`, 'success');
     navigate('inventory');
   } catch(e) { showToast(e.message, 'info'); }
+  });
 }
 
 // ── CHAT ──────────────────────────────────────────────────────────────────────
@@ -8231,11 +8249,12 @@ async function declineBudgetItem(id) {
 }
 
 async function deleteBudgetItem(id) {
-  if (!confirm('Delete this budget item? This cannot be undone.')) return;
+  showConfirmModal('Delete Budget Item', 'Delete this budget item? This cannot be undone.', async () => {
   try {
     await api('DELETE', `/api/budget/items/${id}`);
     clearCache(); showToast('Removed ✓', 'success'); pgBudget();
   } catch(e) { showToast(e.message, 'error'); }
+  });
 }
 
 // ── Category management (admin) ─────────────────────────────────────────────
@@ -8281,13 +8300,14 @@ async function addBudgetCategory() {
 }
 
 async function deleteBudgetCategory(name) {
-  if (!confirm(`Delete category "${name}"?`)) return;
+  showConfirmModal('Delete Category', `Delete budget category "<strong>${name}</strong>"?`, async () => {
   try {
     await api('DELETE', '/api/budget/categories/' + encodeURIComponent(name));
     clearCache();
     showToast('Category removed ✓', 'success');
     showManageBudgetCategories();
   } catch(e) { showToast(e.message, 'error'); }
+  });
 }
 
 
@@ -8862,12 +8882,13 @@ async function submitInvoice() {
 }
 
 async function markInvoiceReceived(id) {
-  if (!confirm('Mark this invoice as received/paid?')) return;
+  showConfirmModal('Mark Invoice Received', 'Mark this invoice as received and paid?', async () => {
   try {
     await api('PATCH', `/api/invoices/${id}/receive`);
     delete cache['GET/api/invoices'];
     await pgInvoices();
   } catch(e) { showToast(e.message, 'info'); }
+  });
 }
 
 // ── BUDGET MODULE ─────────────────────────────────────────────────────────────
@@ -8991,7 +9012,7 @@ async function showFullAccessLog() {
 
 // ── SEED DATA ────────────────────────────────────────────────────────────────
 async function runSeed() {
-  if (!confirm('Load 10 demo records into each section? This will not overwrite existing data.')) return;
+  showConfirmModal('Load Demo Data', 'Load 10 demo records into each section? This will not overwrite existing data.', async () => {
   try {
     const d = await api('POST', '/api/admin/seed', {});
     clearCache();
@@ -9007,6 +9028,7 @@ async function runSeed() {
   } catch(e) {
     showToast('Seed failed: ' + e.message, 'error');
   }
+  });
 }
 
 
@@ -9160,9 +9182,10 @@ async function addVehicleToCompany(compId) {
 }
 
 async function removeVehicleFromCompany(compId, vehId, compName) {
-  if (!confirm('Remove this vehicle from the unit?')) return;
+  showConfirmModal('Remove Vehicle', 'Remove this vehicle from the unit?', async () => {
   try { clearCache(); await api('DELETE',`/api/companies/${compId}/vehicles/${vehId}`);
     closeModal(); navigate('companies'); } catch(e) { showToast(e.message, 'info'); }
+  });
 }
 
 async function manageCompanyDrivers(compId, compName) {
@@ -9199,9 +9222,10 @@ async function addDriverToCompany(compId) {
 }
 
 async function removeDriverFromCompany(compId, drvId, compName) {
-  if (!confirm('Remove this driver from the unit?')) return;
+  showConfirmModal('Remove Driver', 'Remove this driver from the unit?', async () => {
   try { clearCache(); await api('DELETE',`/api/companies/${compId}/drivers/${drvId}`);
     closeModal(); navigate('companies'); } catch(e) { showToast(e.message, 'info'); }
+  });
 }
 
 function updateDieselPrice(compId, compName, currentPrice) {
@@ -10881,6 +10905,42 @@ async function submitTrip() {
 
 
 // ── MODAL ─────────────────────────────────────────────────────────────────────
+
+// ── Inline input modal — replaces native prompt() ─────────────────────────
+function showInputModal(title, placeholder, callback, opts = {}) {
+  const id = 'imdlg_' + Date.now();
+  const inputType = opts.password ? 'password' : (opts.number ? 'number' : 'text');
+  const prefill = opts.prefill || '';
+  showModal(title, `
+    <p style="font-size:13px;color:var(--text2);margin-bottom:14px">${opts.message || ''}</p>
+    <input class="form-input" id="${id}" type="${inputType}" value="${prefill}"
+      placeholder="${placeholder}" style="margin-bottom:14px"
+      onkeydown="if(event.key==='Enter'){document.getElementById('${id}_ok').click()}">
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary" style="flex:1" id="${id}_ok"
+        onclick="const v=document.getElementById('${id}').value; if(v||${!!opts.allowEmpty}){closeModal();(${callback.toString()})(v);}else{document.getElementById('${id}').style.outline='2px solid var(--red)'}">
+        ${opts.okLabel || 'Confirm'}
+      </button>
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+  setTimeout(() => document.getElementById(id)?.focus(), 100);
+}
+
+// ── Inline confirm modal — replaces native confirm() ──────────────────────
+function showConfirmModal(title, message, onConfirm, opts = {}) {
+  showModal(title, `
+    <p style="font-size:14px;color:var(--text2);margin-bottom:18px;line-height:1.6">${message}</p>
+    <div style="display:flex;gap:8px">
+      <button class="btn ${opts.danger ? 'btn-danger' : 'btn-primary'}" style="flex:1"
+        onclick="closeModal();(${onConfirm.toString()})()">
+        ${opts.confirmLabel || 'Confirm'}
+      </button>
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+// ─────────────────────────────────────────────────────────────────────────────
 function showModal(title, body, size) {
   const existing = el('modal-overlay');
   if (existing) existing.remove();
@@ -11918,7 +11978,7 @@ async function submitIssueComment(id) {
 }
 
 async function resolveIssue(id) {
-  const notes = prompt('Resolution notes (optional):') || '';
+  const notes = ''; // resolved inline
   try {
     await api('PATCH', `/api/issues/${id}/resolve`, { resolution_notes: notes });
     closeModal();
@@ -12118,8 +12178,9 @@ async function updateDept(id) {
   } catch(e) { showToast(e.message, 'info'); }
 }
 async function deleteDept(id, name) {
-  if (!confirm(`Delete department "${name}"? Members will not be deleted.`)) return;
+  showConfirmModal('Delete Department', `Delete department "<strong>${name}</strong>"? Members will not be deleted.`, async () => {
   try { await api('DELETE', `/api/departments/${id}`); navigate('departments'); } catch(e) { showToast(e.message, 'info'); }
+  });
 }
 function filterUsersByDept(dept) { navigate('users'); }
 
@@ -12300,16 +12361,18 @@ async function deleteUserSA(id) {
   const allUsers = window._allUsersList || [];
   const target = allUsers.find(u => u.id === id);
   if (['super_admin','real_admin'].includes(target?.role)) { showToast('Super Admin accounts cannot be deleted.', 'error'); return; }
-  if (!confirm(`Delete user "${target?.full_name || id}"?\nThis permanently removes their account and cannot be undone.`)) return;
-  const reason = prompt('Enter reason for deletion (required for audit trail):');
-  if (!reason?.trim()) { showToast('A reason is required.', 'error'); return; }
-  try {
-    clearCache();
-    await api('DELETE', `/api/users/${id}`, { reason });
-    closeModal();
-    showToast('User account deleted', 'success');
-    navigate('users');
-  } catch(e) { showToast(e.message || 'Delete failed', 'error'); }
+  showInputModal('Delete User Account', 'Enter reason for deletion (required for audit trail)', async (reason) => {
+    if (!reason?.trim()) { showToast('A reason is required for audit purposes.', 'error'); return; }
+    showConfirmModal('Confirm Deletion', `Permanently delete <strong>${target?.full_name || 'this user'}</strong>? This cannot be undone.`, async () => {
+      try {
+        clearCache();
+        await api('DELETE', `/api/users/${id}`, { reason });
+        closeModal();
+        showToast('User account deleted', 'success');
+        navigate('users');
+      } catch(e) { showToast(e.message || 'Delete failed', 'error'); }
+    }, { danger: true });
+  });
 }
 
 async function submitEditUserFull(id) {
@@ -12350,7 +12413,6 @@ function showManageRoles() {
           <th style="padding:8px 12px;text-align:left;color:var(--t3);border-bottom:1px solid var(--b2)">Access Level</th>
           <th style="padding:8px 12px;text-align:left;color:var(--t3);border-bottom:1px solid var(--b2)">Key Permissions</th>
         </tr></thead>
-        <tbody>
           ${[
             {role:'super_admin', level:'Full', perms:'All modules, user management, system config'},
             {role:'admin', level:'High', perms:'Users, finance, operations, reports'},
@@ -12361,7 +12423,7 @@ function showManageRoles() {
             {role:'compliance', level:'Compliance', perms:'Compliance alerts, document tracking'},
             {role:'driver', level:'Limited', perms:'Trip log, own records'},
             {role:'staff', level:'Basic', perms:'Dashboard, own requests, chat'},
-          ].map((r,i) => `<tr style="background:${i%2===0?'transparent':'rgba(255,255,255,.015)'};border-bottom:1px solid var(--b2)">
+          ].map(r => `<tr>
             <td style="padding:8px 12px"><span class="badge badge-approved" style="font-size:10px">${r.role.replace(/_/g,' ')}</span></td>
             <td style="padding:8px 12px;color:var(--gold);font-weight:600">${r.level}</td>
             <td style="padding:8px 12px;color:var(--t2)">${r.perms}</td>
@@ -12377,7 +12439,7 @@ function showManageRoles() {
 function copySignupLink() {
   const link = window.location.origin + window.location.pathname + '#signup';
   navigator.clipboard?.writeText(link).then(() => showToast('Signup link copied!', 'success')).catch(() => {
-    prompt('Copy this signup link:', link);
+    navigator.clipboard?.writeText(link).then(()=>showToast('Signup link copied to clipboard','success')).catch(()=>showToast('Link: '+link,'info'));
   });
 }
 
@@ -12508,7 +12570,7 @@ async function confirmApproveSignup(id) {
 }
 
 async function resendCredentials(userId, email) {
-  if (!confirm(`Resend login credentials to ${email}? This will generate a new password.`)) return;
+  showConfirmModal('Resend Credentials', `Resend login credentials to <strong>${email}</strong>? A new password will be generated.`, async () => {
   try {
     const result = await api('POST', `/api/users/${userId}/resend-credentials`);
     const d = result.delivery || {};
@@ -12519,15 +12581,17 @@ async function resendCredentials(userId, email) {
       d.email || d.whatsapp ? 'success' : 'error'
     );
   } catch(e) { showToast(e.message, 'info'); }
+  });
 }
 
 async function rejectSignup(id) {
-  const reason = prompt('Reason for rejection (optional):') || '';
-  try {
-    await api('PATCH', `/api/signup-requests/${id}/reject`, { reason });
+  showInputModal('Reject Signup', 'Reason for rejection (optional)', async (reason) => {
+    try {
+      await api('PATCH', `/api/signup-requests/${id}/reject`, { reason });
     showToast('Signup request rejected', 'error');
     navigate('users');
   } catch(e) { showToast(e.message, 'info'); }
+  });
 }
 
 function showEditUser(id, name, role, dept, depot) {
@@ -12574,13 +12638,15 @@ async function submitEditUser(id) {
 }
 
 async function resetUserPassword(id, name) {
-  if (!confirm(`Reset password for ${name}?`)) return;
-  const newPass = prompt('Enter new password (min 8 chars):');
-  if (!newPass || newPass.length < 8) { showToast('Password too short', 'info'); return; }
-  try {
-    await api('PATCH', `/api/users/${id}/password`, { password: newPass });
-    showToast('Password updated', 'success');
-  } catch(e) { showToast(e.message, 'info'); }
+  showInputModal('Change Password', `New password for ${name} (min 8 characters)`, async (newPass) => {
+    if (newPass.length < 8) { showToast('Password must be at least 8 characters', 'error'); return; }
+    showConfirmModal('Confirm Password Reset', `Reset password for <strong>${name}</strong>?`, async () => {
+      try {
+        await api('PATCH', `/api/users/${id}/password`, { password: newPass });
+        showToast('Password updated successfully ✅', 'success');
+      } catch(e) { showToast(e.message || 'Could not update password', 'error'); }
+    });
+  }, { password: true });
 }
 
 // ── SIGNUP PAGE (rendered when URL hash is #signup) ──────────────────────────
@@ -12624,7 +12690,6 @@ function renderSignupPage() {
               <option>Abuja</option><option>Kano</option><option>PHC</option>
             </select></div>
         </div>
-        <div class="form-group"><label class="form-label">Message (optional)</label>
           <textarea class="form-input" id="su-msg" rows="2" placeholder="Anything you'd like the admin to know…"></textarea></div>
         <button class="btn btn-primary btn-block" onclick="submitSignupRequest()" style="padding:14px;font-size:14px;font-weight:700">
           <i class="ti ti-send"></i> Submit Access Request
@@ -12635,7 +12700,6 @@ function renderSignupPage() {
       </div>
       <div id="signup-success" style="display:none;text-align:center;padding:20px">
         <div style="font-size:48px;margin-bottom:12px">✅</div>
-        <div style="font-size:18px;font-weight:800;color:var(--t1);margin-bottom:8px">Request Submitted!</div>
         <div style="font-size:13px;color:var(--t3);margin-bottom:20px">A Super Admin will review your request and contact you with login details.</div>
         <button class="btn btn-primary" onclick="window.location.hash='';render()">Back to Login</button>
       </div>
@@ -14589,11 +14653,12 @@ async function saveCronSchedule() {
 }
 
 async function testRunReport(type) {
-  if (!confirm(`Trigger ${type} report NOW? This will send emails to all subscribers.`)) return;
+  showConfirmModal('Trigger Report', `Trigger <strong>${type}</strong> report NOW? This will send emails to all subscribers.`, async () => {
   try {
     await api('POST', '/api/cron-settings/test-run', { type });
     if (typeof showToast === 'function') showToast(`✅ ${type} report triggered`, 'success');
   } catch(e) { if (typeof showToast === 'function') showToast(`Failed: ${e.message}`, 'error'); }
+  });
 }
 
 // Spin keyframe (safe to declare again)
