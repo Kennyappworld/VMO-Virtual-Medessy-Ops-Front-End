@@ -11790,24 +11790,41 @@ function showNewIssue() {
 }
 
 async function submitNewIssue() {
-  const title = document.getElementById('ni-title')?.value?.trim();
-  if (!title) { alert('Title required'); return; }
-  const taggedDepts = [...document.querySelectorAll('.issue-dept-tag:checked')].map(c => c.value);
-  const taggedUsers = [...document.querySelectorAll('.issue-user-tag:checked')].map(c => ({ id: parseInt(c.value), name: c.dataset.name }));
+  const title = el('ni-title')?.value?.trim();
+  if (!title) { showToast('Please enter a title for the issue', 'error'); el('ni-title')?.focus(); return; }
+
+  // Collect tagged departments
+  const taggedDepts = [...document.querySelectorAll('.issue-dept-tag:checked')]
+    .map(c => c.value).filter(Boolean);
+
+  // Collect tagged people (class changed to issue-person-tag)
+  const taggedUsers = [...document.querySelectorAll('.issue-person-tag:checked')]
+    .map(c => ({ id: parseInt(c.value) })).filter(t => t.id);
+
+  const btn = el('ni-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Raising…'; }
+
   try {
+    clearCache();
     await api('POST', '/api/issues', {
       title,
-      description: document.getElementById('ni-desc')?.value?.trim() || null,
-      category: document.getElementById('ni-cat')?.value || 'general',
-      priority: document.getElementById('ni-pri')?.value || 'normal',
-      tagged_depts: taggedDepts,
-      tagged_users: taggedUsers,
+      description:   el('ni-desc')?.value?.trim() || null,
+      category:      el('ni-cat')?.value || 'Other',
+      priority:      el('ni-priority')?.value || 'low',
+      tagged_depts:  JSON.stringify(taggedDepts),
+      tagged_users:  JSON.stringify(taggedUsers),
+      requester_name: user.full_name || user.name,
+      status: 'open',
     });
     closeModal();
-    showToast('Issue raised successfully', 'success');
-    navigate('issues');
-  } catch(e) { alert(e.message); }
+    showToast('Issue raised — the right people have been notified ✓', 'success');
+    if (typeof pgIssues === 'function') pgIssues();
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-alert-circle"></i> Raise Issue'; }
+    showToast(e.message || 'Could not raise issue', 'error');
+  }
 }
+
 
 async function showIssueKPIs() {
   const kpi = await api('GET', '/api/kpi/dashboard').catch(() => ({}));
