@@ -5781,7 +5781,10 @@ async function pgImprest() {
   const isAccounts = ['real_admin','super_admin','admin','accounts'].includes(user.role);
 
   html('topbar-btn', `
-    <div style="display:flex;gap:6px">
+    <div style="display:flex;gap:6px;align-items:center">
+      ${isAdmin ? `<button class="btn btn-ghost btn-sm" onclick="deduplicateImprest()" title="Remove duplicate accounts" style="font-size:11px">
+        <i class="ti ti-copy-off"></i> Fix Duplicates
+      </button>` : ''}
       ${isAccounts ? `<button class="btn btn-ghost btn-sm" onclick="showImprestStats()"><i class="ti ti-chart-bar"></i></button>` : ''}
       <button class="topbar-action" onclick="showNewImprest()"><i class="ti ti-plus"></i></button>
     </div>`);
@@ -5869,7 +5872,7 @@ async function pgImprest() {
             <div>
               <div style="font-size:15px;font-weight:700;color:var(--text)">${sanitise(acc.label || acc.name)}</div>
               <div style="font-size:12px;color:var(--text3);margin-top:2px">
-                ${sanitise(acc.holder_name || acc.holder || 'null')} · ${sanitise(acc.bank_name || acc.bank || 'Cash')}
+                ${sanitise(acc.holder_name && acc.holder_name !== 'null' ? acc.holder_name : (acc.holder || ''))} ${(acc.holder_name && acc.holder_name !== 'null') || acc.holder ? '·' : ''} ${sanitise(acc.bank_name || acc.bank || 'Cash')}
               </div>
               ${(acc.linked_user_name || acc.linked_department) ? `
               <div style="font-size:11px;color:var(--text3);margin-top:3px;display:flex;align-items:center;gap:6px">
@@ -5919,6 +5922,10 @@ async function pgImprest() {
             </button>
             <button class="btn btn-ghost btn-sm" onclick="showLinkImprestUserDept(${acc.id},'${sanitise(acc.label||acc.name)}','${sanitise(acc.linked_user_name||'')}','${sanitise(acc.linked_department||'')}')">
               <i class="ti ti-user-plus"></i> ${acc.linked_user_name || acc.linked_department ? 'Re-link User/Dept' : 'Link User/Dept'}
+            </button>
+            <button class="btn btn-ghost btn-sm" style="color:var(--red,#ef4444)"
+              onclick="deleteImprestAccount(${acc.id},'${sanitise(acc.label||acc.name).replace(/'/g,'')}',${bal})">
+              <i class="ti ti-trash"></i> Delete
             </button>` : ''}
           </div>
         </div>`;
@@ -6345,6 +6352,86 @@ async function saveLinkImprestUserDept(accountId) {
     showToast(e.message || 'We could not save this link. Please try again.', 'error');
   }
 }
+
+async function deleteImprestAccount(id, name, balance) {
+  // If account has balance, warn and require confirmation
+  const hasBalance = parseFloat(balance) > 0;
+  const fmt = n => '₦' + Number(n||0).toLocaleString('en-NG', {minimumFractionDigits:0});
+
+  showModal('🗑 Delete Imprest Account', `
+    <div style="text-align:center;padding:10px 0 18px">
+      <div style="font-size:40px;margin-bottom:10px">⚠️</div>
+      <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:8px">
+        Delete "${name}"?
+      </div>
+      ${hasBalance ? `
+        <div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);
+                    border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#f87171">
+          ⚠ This account still has <strong>${fmt(balance)}</strong> balance.
+          Please retire or transfer funds before deleting.
+        </div>` : ''}
+      <div style="font-size:13px;color:var(--text2);margin-bottom:20px;line-height:1.6;max-width:320px;margin-left:auto;margin-right:auto">
+        The account will be <strong>archived</strong> — all transaction history is preserved
+        for audit purposes. It will no longer appear in active accounts.
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <button class="btn btn-danger" style="flex:1" ${hasBalance ? 'disabled title="Clear balance first"' : ''}
+        onclick="confirmDeleteImprest(${id}, false)">
+        <i class="ti ti-archive"></i> Archive Account
+      </button>
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal()">Cancel</button>
+    </div>
+
+    <details style="margin-top:8px">
+      <summary style="font-size:12px;color:var(--text3);cursor:pointer;padding:6px 0">
+        ⚠ Permanent deletion (irreversible)
+      </summary>
+      <div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);
+                  border-radius:8px;padding:12px;margin-top:8px;font-size:12px;color:var(--text2)">
+        <p style="margin:0 0 10px">Permanently removes the account and <strong>all transaction history</strong>.
+        This cannot be undone and will affect audit trails.</p>
+        <button class="btn btn-danger btn-sm" style="width:100%"
+          onclick="confirmDeleteImprest(${id}, true)">
+          <i class="ti ti-trash"></i> Delete Permanently (Super Admin)
+        </button>
+      </div>
+    </details>
+  `);
+}
+
+async function confirmDeleteImprest(id, permanent) {
+  try {
+    const url = permanent ? `/api/imprest/${id}?hard_delete=1` : `/api/imprest/${id}`;
+    const result = await api('DELETE', url);
+    closeModal();
+    showToast(result.message || (permanent ? 'Account permanently deleted.' : 'Account archived successfully.'),
+              permanent ? 'info' : 'success');
+    pgImprest(); // Refresh the list
+  } catch(e) {
+    showToast(e.message || 'Could not delete this account. Please try again.', 'error');
+  }
+}
+
+// ── Deduplicate imprest accounts ───────────────────────────────────────────────
+async function deduplicateImprest() {
+  showConfirmModal(
+    'Remove Duplicate Accounts',
+    'This will find and archive all duplicate imprest accounts with the same name, keeping only the oldest one. Transaction history is preserved.',
+    async () => {
+      try {
+        const r = await api('POST', '/api/imprest/deduplicate');
+        showToast(r.message || 'Deduplication complete.', 'success');
+        pgImprest();
+      } catch(e) {
+        showToast(e.message || 'Deduplication failed. Please try again.', 'error');
+      }
+    },
+    { confirmLabel: 'Remove Duplicates', danger: false }
+  );
+}
+
 
 
 async function saveLinkImprestVendor(accountId) {
