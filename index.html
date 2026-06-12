@@ -1034,6 +1034,161 @@ let cache = {}; // in-memory cache; never persisted
 
 // ── API ──────────────────────────────────────────────────────────────────────
 
+
+// ── MY PROFILE & SETTINGS ────────────────────────────────────────────────────
+async function showMyProfile() {
+  // Load full profile data
+  let profile = {};
+  try { profile = await api('GET', '/api/profile'); } catch(e) { profile = user || {}; }
+
+  const initials = avatar(profile.full_name || profile.name || 'U');
+  const avatarUrl = profile.avatar_url;
+
+  showModal('👤 My Profile & Settings', `
+    <!-- Avatar section -->
+    <div style="text-align:center;margin-bottom:20px">
+      <div id="prof-avatar-display"
+        style="width:80px;height:80px;border-radius:50%;margin:0 auto 10px;overflow:hidden;
+               border:3px solid var(--gold,#c9a84c);cursor:pointer;position:relative"
+        onclick="document.getElementById('prof-avatar-input').click()"
+        title="Click to change profile picture">
+        ${avatarUrl
+          ? `<img src="${sanitise(avatarUrl)}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'">`
+          : `<div style="width:100%;height:100%;background:linear-gradient(135deg,var(--accent),var(--gold));
+              display:flex;align-items:center;justify-content:center;font-size:28px;
+              font-weight:800;color:#fff">${initials}</div>`}
+        <div style="position:absolute;bottom:0;right:0;width:24px;height:24px;background:var(--gold);
+                    border-radius:50%;display:flex;align-items:center;justify-content:center">
+          <i class="ti ti-camera" style="font-size:12px;color:#fff"></i>
+        </div>
+      </div>
+      <input type="file" id="prof-avatar-input" accept="image/*" style="display:none"
+        onchange="uploadProfileAvatar(this)">
+      <div style="font-size:14px;font-weight:700;color:var(--text)">${sanitise(profile.full_name||profile.name||'')}</div>
+      <div style="font-size:12px;color:var(--text3)">${sanitise(profile.email||'')}</div>
+      <span style="font-size:10px;padding:2px 10px;border-radius:10px;background:rgba(79,142,247,.15);
+                   color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-top:4px;display:inline-block">
+        ${sanitise(profile.role||'staff')}
+      </span>
+    </div>
+
+    <!-- Profile form -->
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Job Title / Designation</label>
+        <input class="form-input" id="prof-title" value="${sanitise(profile.job_title||'')}"
+          placeholder="e.g. Fleet Operations Manager">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Department</label>
+        <input class="form-input" id="prof-dept" value="${sanitise(profile.department||'')}"
+          placeholder="e.g. Logistics, Finance, HR">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Phone Number</label>
+      <input class="form-input" id="prof-phone" type="tel" value="${sanitise(profile.phone||'')}"
+        placeholder="+234 800 000 0000">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Bio / About Me</label>
+      <textarea class="form-input" id="prof-bio" rows="3"
+        placeholder="A brief description — your role, expertise, or how you contribute to the team…"
+        style="resize:vertical">${sanitise(profile.bio||'')}</textarea>
+      <div style="text-align:right;font-size:11px;color:var(--text3);margin-top:3px">
+        <span id="prof-bio-count">${(profile.bio||'').length}</span>/300
+      </div>
+    </div>
+
+    <!-- Change password -->
+    <details style="margin-bottom:14px">
+      <summary style="font-size:13px;cursor:pointer;padding:8px 0;color:var(--text2)">
+        🔑 Change Password
+      </summary>
+      <div style="padding:12px 0 0">
+        <div class="form-group">
+          <label class="form-label">New Password</label>
+          <input class="form-input" id="prof-pw" type="password" placeholder="Min 8 characters">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Confirm New Password</label>
+          <input class="form-input" id="prof-pw2" type="password" placeholder="Re-enter new password">
+        </div>
+      </div>
+    </details>
+
+    <button class="btn btn-primary" style="width:100%" onclick="saveMyProfile()">
+      <i class="ti ti-device-floppy"></i> Save Profile
+    </button>
+  `);
+
+  // Live character count for bio
+  setTimeout(() => {
+    const bioEl = document.getElementById('prof-bio');
+    const countEl = document.getElementById('prof-bio-count');
+    if (bioEl && countEl) {
+      bioEl.addEventListener('input', () => {
+        if (bioEl.value.length > 300) bioEl.value = bioEl.value.slice(0, 300);
+        countEl.textContent = bioEl.value.length;
+      });
+    }
+  }, 200);
+}
+
+async function uploadProfileAvatar(input) {
+  if (!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  if (file.size > 3 * 1024 * 1024) { showToast('Image must be under 3MB.', 'error'); return; }
+
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const b64 = e.target.result; // Keep as dataURL for storage
+    try {
+      await api('PATCH', '/api/profile', { avatar_url: b64 });
+      // Update display immediately
+      const display = document.getElementById('prof-avatar-display');
+      if (display) {
+        display.innerHTML = `<img src="${b64}" style="width:100%;height:100%;object-fit:cover">
+          <div style="position:absolute;bottom:0;right:0;width:24px;height:24px;background:var(--gold);
+                      border-radius:50%;display:flex;align-items:center;justify-content:center">
+            <i class="ti ti-camera" style="font-size:12px;color:#fff"></i>
+          </div>`;
+      }
+      showToast('Profile picture updated! 📸', 'success');
+    } catch(err) { showToast('Could not upload picture. Please try again.', 'error'); }
+  };
+  reader.readAsDataURL(file);
+}
+
+async function saveMyProfile() {
+  const payload = {
+    job_title:  document.getElementById('prof-title')?.value?.trim() || '',
+    department: document.getElementById('prof-dept')?.value?.trim() || '',
+    phone:      document.getElementById('prof-phone')?.value?.trim() || '',
+    bio:        document.getElementById('prof-bio')?.value?.trim() || '',
+  };
+
+  const pw  = document.getElementById('prof-pw')?.value;
+  const pw2 = document.getElementById('prof-pw2')?.value;
+
+  if (pw) {
+    if (pw.length < 8) { showToast('Password must be at least 8 characters.', 'error'); return; }
+    if (pw !== pw2)    { showToast('Passwords do not match.', 'error'); return; }
+  }
+
+  try {
+    await api('PATCH', '/api/profile', payload);
+    if (pw) await api('PATCH', `/api/users/${user.id}/password`, { password: pw });
+    showToast('Profile saved successfully! ✅', 'success');
+    closeModal();
+  } catch(e) {
+    showToast(e.message || 'Could not save profile. Please try again.', 'error');
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ── IP & LICENCE NOTICE ───────────────────────────────────────────────────────
 function showIPNotice() {
   const year = new Date().getFullYear();
@@ -1353,12 +1508,12 @@ function renderShell() {
         <div class="sidebar-sub">Virtual Ops Platform</div>
       </div>
       <div class="sidebar-user">
-        <div class="sidebar-avatar">${avatar(userName)}</div>
+        <div class="sidebar-avatar" onclick="showMyProfile()" style="cursor:pointer" title="My Profile">${avatar(userName)}</div>
         <div style="min-width:0;flex:1">
           <div class="sidebar-name">${userName}</div>
           <div class="sidebar-role">${userRole}</div>
         </div>
-        <button onclick="navigate('users')" style="background:none;border:none;color:var(--t4);cursor:pointer;padding:2px" title="Settings">
+        <button onclick="showMyProfile()" style="background:none;border:none;color:var(--t4);cursor:pointer;padding:2px" title="My Profile &amp; Settings">
           <i class="ti ti-settings" style="font-size:14px"></i>
         </button>
       </div>
@@ -1618,6 +1773,36 @@ async function loadImprestAlerts() {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+
+// ── MEETING REMINDER CHECK ────────────────────────────────────────────────────
+async function checkMeetingReminders() {
+  try {
+    const reminders = await api('GET', '/api/meetings/reminders').catch(() => []);
+    if (!Array.isArray(reminders) || !reminders.length) return;
+    for (const m of reminders) {
+      const minsLeft = Math.round((new Date(m.scheduled_at) - new Date()) / 60000);
+      const label = minsLeft <= 1 ? 'starting now' : `in ${minsLeft} minute${minsLeft===1?'':'s'}`;
+      showModal(`🔔 Meeting Reminder`, `
+        <div style="text-align:center;padding:10px 0 18px">
+          <div style="font-size:36px;margin-bottom:12px">📅</div>
+          <div style="font-weight:700;font-size:17px;margin-bottom:6px">${sanitise(m.title)}</div>
+          <div style="font-size:13px;color:var(--text3);margin-bottom:20px">
+            Starting <strong>${label}</strong> · ${m.duration_min} min
+          </div>
+          ${m.meet_link ? `
+          <a href="${sanitise(m.meet_link)}" target="_blank"
+             style="display:inline-block;background:var(--accent);color:#fff;padding:10px 28px;
+                    border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">
+            <i class="ti ti-video"></i> Join Now
+          </a>` : ''}
+        </div>
+        <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="closeModal()">Dismiss</button>
+      `);
+    }
+  } catch(e) { /* reminder check is always silent */ }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function pgDashboard() {
   const dash = await api('GET', '/api/analytics/dashboard').catch(() => ({}));
   const allowed = allowedPages().map(p => p.id);
@@ -1756,6 +1941,9 @@ async function pgDashboard() {
   if (['super_admin','accounts','haulage_manager','operations_manager'].includes(user?.role)) {
     loadImprestAlerts().catch(e => console.warn('[Imprest alerts]', e.message));
   }
+
+  // Check for upcoming meetings in next 15 mins — show reminder toast
+  checkMeetingReminders();
 
   // Load compliance alerts quietly in the background
   api('GET', '/api/compliance/alerts').then(liveAlerts => {
@@ -12226,6 +12414,23 @@ let _meetings = [
   {id:3,title:'Driver Safety Briefing',host:'HR Manager',scheduled:'2026-05-28T09:00:00',duration:30,status:'completed',participants:['HR Manager','Driver Team (12)'],agenda:'Road safety compliance',summary:'All drivers briefed on FRSC regulations. Speed limiters to be calibrated.',actionPoints:['All drivers submit acknowledgment by June 1','Workshop to calibrate speed limiters']},
 ];
 let _activeMtg=null,_mtgTimer=null,_mtgSecs=0,_actionPoints=[];
+
+async function sendMtgSummaryEmail(meetingId, title) {
+  showInputModal(
+    `📧 Email Summary — ${title}`,
+    'Enter email addresses to send summary to (comma-separated)',
+    async (emails) => {
+      if (!emails?.trim()) { showToast('Please enter at least one email address.', 'error'); return; }
+      try {
+        const r = await api('POST', `/api/meetings/${meetingId}/send-summary`, { emails });
+        showToast(`Summary emailed to ${r.sent_to?.length || 0} recipient(s) ✅`, 'success');
+      } catch(e) {
+        showToast(e.message || 'Could not send summary email. Please try again.', 'error');
+      }
+    },
+    { message: 'Only the specified recipients will receive this — not all attendees.', okLabel: 'Send Summary' }
+  );
+}
 async function pgMeetings(){
   html('topbar-btn',`<div style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm" onclick="startInstantMeeting()" style="font-size:11px"><i class="ti ti-video-plus"></i> Instant</button><button class="topbar-action" onclick="showScheduleMeeting()"><i class="ti ti-calendar-plus"></i></button></div>`);
   const upcoming=_meetings.filter(m=>m.status==='upcoming');
@@ -12255,33 +12460,202 @@ function renderMtgCard(m){
       <div style="display:flex;gap:6px;flex-shrink:0">
         ${up?`<button class="btn btn-primary btn-sm" onclick="joinMeeting(${m.id},'${sanitise(m.title).replace(/'/g,"\\'")}')"><i class="ti ti-video"></i> Join</button>`:
           `<button class="btn btn-ghost btn-sm" onclick="viewMtgSummary(${m.id})"><i class="ti ti-file-text"></i> Summary</button>
-           <button class="btn btn-ghost btn-sm" onclick="downloadMtgPDF(${m.id})"><i class="ti ti-download"></i> PDF</button>`}
-      </div>
+           <button class="btn btn-ghost btn-sm" onclick="downloadMtgPDF(${m.id})"><i class="ti ti-download"></i> PDF</button>
+           <button class="btn b           <button class="btn btn-ghost btn-sm" style="color:var(--accent)" onclick="sendMtgSummaryEmail(${m.id})" title="Email summary">
+             <i class="ti ti-mail"></i> Email
+           </button>`}
     </div>
     ${!up&&m.actionPoints?.length?`<div style="margin-top:10px;border-top:1px solid var(--b2);padding-top:10px">${m.actionPoints.map(ap=>`<div class="ap-item">${sanitise(ap)}</div>`).join('')}</div>`:''}
   </div>`;
 }
-function showScheduleMeeting(){
-  showModal('Schedule Meeting',`
-    <div class="form-group"><label class="form-label">Meeting Title</label><input class="form-input" id="sm-title" placeholder="e.g. Weekly Fleet Review"></div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="sm-date" value="${new Date().toISOString().slice(0,10)}"></div>
-      <div class="form-group"><label class="form-label">Time</label><input class="form-input" type="time" id="sm-time" value="10:00"></div>
+async function showScheduleMeeting() {
+  // Load users for attendee selection
+  const users = await api('GET', '/api/users').catch(() => []);
+
+  showModal('📅 Schedule Meeting', `
+    <div class="form-group">
+      <label class="form-label">Meeting Title *</label>
+      <input class="form-input" id="sm-title" placeholder="e.g. Weekly Fleet Review">
     </div>
+
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Duration (min)</label><input class="form-input" type="number" id="sm-dur" value="60"></div>
-      <div class="form-group"><label class="form-label">Type</label><select class="form-input" id="sm-type"><option>Google Meet</option><option>In-Person</option><option>Teams</option><option>Zoom</option></select></div>
+      <div class="form-group">
+        <label class="form-label">Date *</label>
+        <input class="form-input" type="date" id="sm-date" value="${new Date().toISOString().slice(0,10)}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Time *</label>
+        <input class="form-input" type="time" id="sm-time" value="10:00">
+      </div>
     </div>
-    <div class="form-group"><label class="form-label">Agenda</label><textarea class="form-input" id="sm-agenda" rows="2" placeholder="What will be discussed?"></textarea></div>
-    <div style="background:rgba(15,165,114,.06);border:1px solid rgba(15,165,114,.15);border-radius:var(--r-sm);padding:10px 12px;font-size:12px;color:var(--t2);margin-bottom:14px"><i class="ti ti-brand-google-meet" style="color:var(--emerald)"></i> Google Meet link will be generated and emailed to all participants.</div>
-    <div style="display:flex;gap:8px"><button class="btn btn-primary btn-block" onclick="submitScheduleMeeting()"><i class="ti ti-calendar-plus"></i> Schedule</button><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>`);
+
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Duration (minutes)</label>
+        <input class="form-input" type="number" id="sm-dur" value="60" min="15" step="15">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Meeting Type</label>
+        <select class="form-input" id="sm-type" onchange="smToggleLinkField()">
+          <option value="Google Meet">Google Meet (auto-link)</option>
+          <option value="In-Person">In-Person</option>
+          <option value="Teams">Microsoft Teams</option>
+          <option value="Zoom">Zoom</option>
+          <option value="Phone Call">Phone Call</option>
+          <option value="WhatsApp Call">WhatsApp Call</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Meeting link — shown for online types -->
+    <div class="form-group" id="sm-link-row">
+      <label class="form-label">Meeting Link <span style="color:var(--text3);font-weight:400">(auto-generated for Google Meet)</span></label>
+      <input class="form-input" id="sm-link" placeholder="Paste link or leave blank to auto-generate">
+    </div>
+
+    <!-- Internal attendees from user list -->
+    <div class="form-group">
+      <label class="form-label">Internal Attendees</label>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;max-height:140px;overflow-y:auto;padding:8px" id="sm-attendees">
+        ${users.map(u => `
+          <label style="display:flex;align-items:center;gap:8px;padding:5px 6px;cursor:pointer;border-radius:6px"
+            onmouseover="this.style.background='rgba(255,255,255,.04)'" onmouseout="this.style.background=''">
+            <input type="checkbox" value="${u.id}" data-name="${sanitise(u.full_name||u.name)}"
+              class="sm-att-check" style="width:15px;height:15px;cursor:pointer">
+            <span style="font-size:13px">${sanitise(u.full_name||u.name)}</span>
+            <span style="font-size:11px;color:var(--text3);margin-left:auto">${sanitise(u.role||'')}</span>
+          </label>`).join('')}
+      </div>
+    </div>
+
+    <!-- External email attendees -->
+    <div class="form-group">
+      <label class="form-label">
+        External Attendees
+        <span style="color:var(--text3);font-weight:400;font-size:11px"> — email addresses, comma-separated</span>
+      </label>
+      <input class="form-input" id="sm-emails" placeholder="e.g. client@company.com, partner@example.com">
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">
+        📧 Invitation emails with meeting link will be sent to these addresses.
+      </div>
+    </div>
+
+    <!-- Summary recipients -->
+    <div class="form-group">
+      <label class="form-label">
+        Summary Recipients (after meeting)
+        <span style="color:var(--text3);font-weight:400;font-size:11px"> — optional, email addresses</span>
+      </label>
+      <input class="form-input" id="sm-summary-emails" placeholder="e.g. manager@medessy.com">
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">
+        📋 Summary will only be emailed to these addresses — not everyone automatically.
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Agenda</label>
+      <textarea class="form-input" id="sm-agenda" rows="3" placeholder="What will be discussed? Key points, expected outcomes…"></textarea>
+    </div>
+
+    <!-- Reminder info -->
+    <div style="background:rgba(79,142,247,.07);border:1px solid rgba(79,142,247,.2);border-radius:8px;
+                padding:10px 14px;font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.7">
+      <i class="ti ti-bell" style="color:var(--accent);margin-right:6px"></i>
+      <strong>Reminders:</strong> All attendees receive an in-app notification 15 minutes before the meeting starts.
+      External guests receive an email invitation immediately on scheduling.
+    </div>
+
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary" style="flex:1" onclick="submitScheduleMeeting()">
+        <i class="ti ti-calendar-plus"></i> Schedule Meeting
+      </button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
 }
-function submitScheduleMeeting(){
-  const title=el('sm-title')?.value?.trim();const date=el('sm-date')?.value;
-  if(!title||!date){showToast('Title and date required', 'error');return;}
-  _meetings.unshift({id:Date.now(),title,host:user?.full_name||user?.name||'Admin',scheduled:`${date}T${el('sm-time')?.value||'10:00'}:00`,duration:parseInt(el('sm-dur')?.value)||60,status:'upcoming',participants:[user?.full_name||user?.name||'Admin'],agenda:el('sm-agenda')?.value||''});
-  closeModal();pgMeetings();
+
+function smToggleLinkField() {
+  const type = document.getElementById('sm-type')?.value;
+  const linkRow = document.getElementById('sm-link-row');
+  if (!linkRow) return;
+  const isOnline = !['In-Person'].includes(type);
+  linkRow.style.display = isOnline ? 'block' : 'none';
+  const linkInput = document.getElementById('sm-link');
+  if (linkInput) {
+    linkInput.placeholder = type === 'Google Meet'
+      ? 'Auto-generated — leave blank'
+      : `Paste your ${type} link here`;
+  }
 }
+
+async function submitScheduleMeeting() {
+  const title   = document.getElementById('sm-title')?.value?.trim();
+  const date    = document.getElementById('sm-date')?.value;
+  const time    = document.getElementById('sm-time')?.value || '10:00';
+  const type    = document.getElementById('sm-type')?.value;
+
+  if (!title || !date) { showToast('Please enter a title and date.', 'error'); return; }
+
+  // Collect internal attendees
+  const checks = document.querySelectorAll('.sm-att-check:checked');
+  const participants = Array.from(checks).map(c => ({ id: c.value, name: c.dataset.name }));
+
+  const body = {
+    title,
+    scheduled_at:   `${date}T${time}:00`,
+    duration_min:   parseInt(document.getElementById('sm-dur')?.value) || 60,
+    meeting_type:   type,
+    participants,
+    agenda:         document.getElementById('sm-agenda')?.value?.trim() || '',
+    attendee_emails: document.getElementById('sm-emails')?.value?.trim() || '',
+    summary_emails:  document.getElementById('sm-summary-emails')?.value?.trim() || '',
+    meet_link:       document.getElementById('sm-link')?.value?.trim() || '',
+  };
+
+  try {
+    const result = await api('POST', '/api/meetings', body);
+    closeModal();
+
+    // Show shareable link if generated
+    if (result.meet_link) {
+      showModal('✅ Meeting Scheduled!', `
+        <div style="text-align:center;padding:10px 0 18px">
+          <div style="font-size:32px;margin-bottom:10px">🎉</div>
+          <div style="font-weight:700;font-size:16px;margin-bottom:6px">${sanitise(title)}</div>
+          <div style="font-size:13px;color:var(--text3);margin-bottom:20px">
+            ${new Date(body.scheduled_at).toLocaleString('en-GB', {dateStyle:'full',timeStyle:'short'})}
+          </div>
+        </div>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:16px">
+          <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Meeting Link</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input class="form-input" value="${sanitise(result.meet_link)}" readonly style="flex:1;font-size:12px" id="mtg-link-copy">
+            <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard?.writeText('${sanitise(result.meet_link)}').then(()=>showToast('Link copied!','success'))">
+              <i class="ti ti-copy"></i> Copy
+            </button>
+          </div>
+        </div>
+        ${body.attendee_emails ? `<div style="font-size:12px;color:var(--text2);margin-bottom:14px">
+          <i class="ti ti-check" style="color:var(--green)"></i>
+          Invitation emails sent to: ${sanitise(body.attendee_emails)}
+        </div>` : ''}
+        <div style="display:flex;gap:8px">
+          <a href="${sanitise(result.meet_link)}" target="_blank" class="btn btn-primary" style="flex:1;text-align:center;text-decoration:none">
+            <i class="ti ti-video"></i> Open Meeting
+          </a>
+          <button class="btn btn-ghost" onclick="closeModal();pgMeetings()">Done</button>
+        </div>
+      `);
+    } else {
+      showToast('Meeting scheduled successfully! 📅', 'success');
+      await loadMeetings();
+      pgMeetings();
+    }
+  } catch(e) {
+    showToast(e.message || 'Could not schedule meeting. Please try again.', 'error');
+  }
+}
+// submitScheduleMeeting is now part of showScheduleMeeting above
 function startInstantMeeting(){
   const m={id:Date.now(),title:`Instant Meeting — ${new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`,host:user?.full_name||user?.name||'Host',scheduled:new Date().toISOString(),duration:0,status:'live',participants:[user?.full_name||user?.name||'Host'],agenda:'Instant meeting'};
   _meetings.unshift(m);launchMtgOverlay(m);
@@ -12779,6 +13153,111 @@ async function deleteDept(id, name) {
 function filterUsersByDept(dept) { navigate('users'); }
 
 // ── ENHANCED USERS PAGE ────────────────────────────────────────────────────────
+
+// ── ADMIN USER MANAGEMENT FUNCTIONS ──────────────────────────────────────────
+
+async function showReassignRole(userId, userName, currentRole) {
+  const ROLES = [
+    { value: 'super_admin',        label: 'Super Admin',         desc: 'Full system access' },
+    { value: 'accounts',           label: 'Accounts',            desc: 'Payments, imprest, receivables' },
+    { value: 'haulage_manager',    label: 'Haulage Manager',     desc: 'Trips, vehicles, drivers, fuel' },
+    { value: 'operations_manager', label: 'Operations Manager',  desc: 'Fleet, pool, reservations' },
+    { value: 'compliance',         label: 'Compliance Officer',  desc: 'Compliance records, audits' },
+    { value: 'hr',                 label: 'HR Officer',          desc: 'Staff records, departments' },
+    { value: 'maintenance_manager',label: 'Maintenance Manager', desc: 'Vehicle maintenance, repairs' },
+    { value: 'store_manager',      label: 'Store Manager',       desc: 'Inventory, store locations' },
+    { value: 'store_keeper',       label: 'Store Keeper',        desc: 'Inventory issues' },
+    { value: 'pool_manager',       label: 'Pool Manager',        desc: 'Pool vehicles, reservations' },
+    { value: 'driver',             label: 'Driver',              desc: 'Own trips and fuel requests only' },
+    { value: 'staff',              label: 'Staff',               desc: 'Basic access — own requests' },
+  ];
+
+  showModal(`🔑 Reassign Role — ${sanitise(userName)}`, `
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">
+      Current role: <strong style="color:var(--accent)">${sanitise(currentRole)}</strong>.
+      Select a new role below. Changes take effect on the user's next login.
+    </p>
+    <div style="display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto" id="role-list">
+      ${ROLES.map(r => `
+        <label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:8px;
+          border:1px solid ${r.value === currentRole ? 'var(--accent)' : 'var(--border)'};
+          background:${r.value === currentRole ? 'rgba(79,142,247,.08)' : 'transparent'};cursor:pointer"
+          onmouseover="this.style.background='rgba(255,255,255,.04)'"
+          onmouseout="this.style.background='${r.value === currentRole ? 'rgba(79,142,247,.08)' : 'transparent'}'">
+          <input type="radio" name="new-role" value="${r.value}"
+            ${r.value === currentRole ? 'checked' : ''} style="margin-top:2px;cursor:pointer">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--text)">${r.label}</div>
+            <div style="font-size:11px;color:var(--text3)">${r.desc}</div>
+          </div>
+        </label>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn btn-primary" style="flex:1" onclick="confirmReassignRole(${userId},'${sanitise(userName)}')">
+        <i class="ti ti-check"></i> Save Role
+      </button>
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+async function confirmReassignRole(userId, userName) {
+  const selected = document.querySelector('input[name="new-role"]:checked');
+  if (!selected) { showToast('Please select a role.', 'error'); return; }
+  try {
+    const r = await api('PATCH', `/api/users/${userId}/role`, { role: selected.value });
+    showToast(r.message || `Role updated for ${userName}.`, 'success');
+    closeModal();
+    pgUsers();
+  } catch(e) { showToast(e.message || 'Could not update role.', 'error'); }
+}
+
+function deleteUserFull(userId, userName) {
+  showModal(`🗑 Delete User — ${sanitise(userName)}`, `
+    <div style="text-align:center;padding:10px 0 20px">
+      <div style="font-size:40px;margin-bottom:12px">⚠️</div>
+      <div style="font-weight:700;font-size:16px;margin-bottom:8px">Delete "${sanitise(userName)}"?</div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.6;max-width:320px;margin:0 auto">
+        Choose how to remove this user account.
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:10px;padding:12px 14px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:4px">Deactivate (Recommended)</div>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
+          User cannot sign in but their data, trips, and records are preserved for audit purposes.
+        </div>
+        <button class="btn btn-warning" style="width:100%" onclick="confirmDeleteUser(${userId}, false)">
+          <i class="ti ti-user-off"></i> Deactivate Account
+        </button>
+      </div>
+
+      <div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.25);border-radius:10px;padding:12px 14px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:4px;color:var(--red,#ef4444)">Permanent Delete</div>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
+          Completely removes the account and all sessions. Cannot be undone. Use only if the account was created in error.
+        </div>
+        <button class="btn btn-danger" style="width:100%" onclick="confirmDeleteUser(${userId}, true)">
+          <i class="ti ti-trash"></i> Delete Permanently
+        </button>
+      </div>
+    </div>
+    <button class="btn btn-ghost" style="width:100%" onclick="closeModal()">Cancel</button>
+  `);
+}
+
+async function confirmDeleteUser(userId, permanent) {
+  try {
+    const url = permanent ? `/api/users/${userId}?permanent=1` : `/api/users/${userId}`;
+    const r = await api('DELETE', url);
+    showToast(r.message || 'User removed.', permanent ? 'info' : 'success');
+    closeModal();
+    pgUsers();
+  } catch(e) { showToast(e.message || 'Could not delete user. Please try again.', 'error'); }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function pgUsers() {
   const isAdmin = ['real_admin','super_admin','admin'].includes(user.role);
   const isSuperAdmin = user.role === 'super_admin';
@@ -12883,6 +13362,8 @@ async function pgUsers() {
                   <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 7px" title="Edit user" onclick="showEditUserFull(${uid})"><i class="ti ti-edit"></i></button>
                   <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 7px" title="Reset password" onclick="resetUserPassword(${uid},'${uname}')"><i class="ti ti-key"></i></button>
                   <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 7px" title="Resend credentials" onclick="resendCredentials(${uid},'${uemail}')"><i class="ti ti-send"></i></button>
+                  <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 7px" title="Reassign Role" onclick="showReassignRole(${uid},'${uname}','${urole}')"><i class="ti ti-user-cog"></i></button>
+                  <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 7px;color:var(--red,#ef4444)" title="Delete User" onclick="deleteUserFull(${uid},'${uname}')"><i class="ti ti-trash"></i></button>
                 </div>
               </td>` : ''}
             </tr>`;
