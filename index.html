@@ -7,6 +7,19 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- VMO — Virtual Medessy Operations                                        -->
+  <!-- © 2026 Faithgem Technologies & Kenneth Gaawa & Co.                     -->
+  <!-- All Rights Reserved. Licensed exclusively to Medessy Enterprises Ltd.  -->
+  <!-- Licence Reference: MEL-NG-001 | Proprietary & Confidential             -->
+  <!-- Unauthorised copying, distribution or resale is strictly prohibited.   -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <meta name="author"           content="Faithgem Technologies — Kenneth Gaawa &amp; Co.">
+  <meta name="copyright"        content="© 2026 Faithgem Technologies &amp; Kenneth Gaawa. All Rights Reserved.">
+  <meta name="application-name" content="VMO — Virtual Medessy Operations by Faithgem Technologies">
+  <meta name="owner"            content="Faithgem Global Services / Kenneth Gaawa &amp; Co.">
+  <meta name="licence"          content="Proprietary — Licensed exclusively to Medessy Enterprises Limited for internal use only. MEL-NG-001.">
+  <meta name="generator"        content="Faithgem Technologies VMO Platform v14">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com https://js.pusher.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; connect-src 'self' https://vmo-virtual-medessy-opps-backend-production.up.railway.app https://cdn.jsdelivr.net https://api.anthropic.com wss://*.pusher.com https://*.pusher.com; worker-src 'self' blob:; frame-ancestors 'none';">
 <meta http-equiv="X-Content-Type-Options" content="nosniff">
 <meta http-equiv="X-Frame-Options" content="SAMEORIGIN">
@@ -14,7 +27,7 @@
 <meta http-equiv="Permissions-Policy" content="geolocation=(), microphone=(), camera=(), payment=()">
 <meta name="theme-color" content="#0d0f17">
 <meta name="robots" content="noindex, nofollow">
-<title>VMO — Medessy Operations</title>
+<title>VMO — Medessy Operations | Faithgem Technologies</title>
 <!-- VMO v14.2 build:20260610 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -851,6 +864,30 @@ textarea.form-input { resize: vertical; min-height: 80px; line-height: 1.5; }
 <div id="root"></div>
 
 <script>
+/* ═══════════════════════════════════════════════════════════════════════════
+ * VMO — Virtual Medessy Operations Platform
+ * © 2026 Faithgem Technologies & Kenneth Gaawa & Co. All Rights Reserved.
+ * Licence: MEL-NG-001 | Licensee: Medessy Enterprises Limited (Nigeria)
+ * This software is proprietary. Unauthorised copying, reverse-engineering,
+ * redistribution, or resale is strictly prohibited and constitutes a breach
+ * of the IP Licence Agreement executed between the parties.
+ * Build: VMO-FGT-2026-v14 | Owner: Faithgem Global Services
+ * ═══════════════════════════════════════════════════════════════════════════ */
+const _VMO_IP = Object.freeze({
+  product:   'VMO — Virtual Medessy Operations',
+  owner:     'Faithgem Technologies & Kenneth Gaawa & Co.',
+  entity:    'Faithgem Global Services',
+  licensee:  'Medessy Enterprises Limited',
+  licRef:    'MEL-NG-001',
+  territory: 'Nigeria',
+  build:     'VMO-FGT-2026-v14',
+  notice:    '© 2026 Faithgem Technologies & Kenneth Gaawa. All Rights Reserved.',
+  warning:   'Proprietary software. Unauthorised use, copying or distribution strictly prohibited.',
+});
+// Emit build fingerprint to console (visible to any developer inspecting the app)
+console.info('%c VMO — Faithgem Technologies ', 'background:#1a1f35;color:#c9a84c;font-weight:bold;padding:4px 8px;border-radius:4px;font-size:12px');
+console.info('%c© 2026 Faithgem Technologies & Kenneth Gaawa & Co. | Licence: MEL-NG-001', 'color:#888;font-size:11px');
+console.info('%cThis software is proprietary and licensed exclusively to Medessy Enterprises Limited.', 'color:#888;font-size:11px');
 'use strict';
 
 // ── SECURITY HARDENING ────────────────────────────────────────────────────────
@@ -996,6 +1033,53 @@ let chatGroupId = null;
 let cache = {}; // in-memory cache; never persisted
 
 // ── API ──────────────────────────────────────────────────────────────────────
+
+// ── IP & LICENCE NOTICE ───────────────────────────────────────────────────────
+function showIPNotice() {
+  const year = new Date().getFullYear();
+  showModal('Intellectual Property & Licence Notice', `
+    <div style="text-align:center;margin-bottom:20px">
+      <div style="font-size:28px;font-weight:900;color:var(--gold,#c9a84c);letter-spacing:-1px;margin-bottom:4px">VMO</div>
+      <div style="font-size:11px;color:var(--text3);letter-spacing:2px;text-transform:uppercase">Virtual Medessy Operations</div>
+    </div>
+
+    <div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.2);border-radius:10px;padding:14px 16px;margin-bottom:14px;font-size:12px;color:var(--text2);line-height:1.8">
+      <p style="margin:0 0 8px;font-weight:600;color:var(--text)">© ${year} Faithgem Technologies &amp; Kenneth Gaawa. All Rights Reserved.</p>
+      <p style="margin:0">This software is the exclusive intellectual property of <strong>Faithgem Global Services / Kenneth Gaawa &amp; Co.</strong> and is licensed — not sold — to Medessy Enterprises Limited for internal operational use only within Nigeria.</p>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;font-size:11px">
+      ${[
+        ['Owner',       'Faithgem Global Services / Kenneth Gaawa &amp; Co.'],
+        ['Licensee',    'Medessy Enterprises Limited'],
+        ['Licence Ref', 'MEL-NG-001'],
+        ['Territory',   'Federal Republic of Nigeria'],
+        ['Build',       'VMO-FGT-2026-v14'],
+        ['Governed by', 'Laws of Nigeria'],
+      ].map(([l,v]) => `
+        <div style="background:var(--bg2);border-radius:8px;padding:8px 10px">
+          <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">${l}</div>
+          <div style="font-weight:600;color:var(--text);font-size:11px">${v}</div>
+        </div>`).join('')}
+    </div>
+
+    <div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:11px 14px;font-size:11px;color:var(--text2);line-height:1.7;margin-bottom:14px">
+      <strong style="color:var(--red,#ef4444)">⚠ Prohibited Acts:</strong> Copying, redistribution, reverse-engineering, sub-licensing, creating derivative works, or removing any IP notice is strictly prohibited and constitutes a material breach of the Licence Agreement, entitling the Licensor to immediate termination and full legal remedy under Nigerian law.
+    </div>
+
+    <div style="text-align:center;font-size:10px;color:var(--text3);line-height:1.8">
+      <div>Powered by <strong>Faithgem Technologies</strong></div>
+      <div>For licence enquiries: Faithgem Global Services / Kenneth Gaawa &amp; Co.</div>
+      <div style="margin-top:6px;font-family:'DM Mono',monospace;font-size:9px;opacity:.6">
+        VMO-FGT-2026-v14 · MEL-NG-001 · © ${year} Faithgem Technologies
+      </div>
+    </div>
+
+    <button class="btn btn-ghost" style="width:100%;margin-top:14px" onclick="closeModal()">Close</button>
+  `);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function api(method, path, body) {
   const key = method + path;
   if (method === 'GET' && cache[key]) {
@@ -1153,7 +1237,10 @@ function renderLogin(err) {
         </div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
           <div style="width:2px;height:42px;background:linear-gradient(180deg,var(--gold),transparent);border-radius:2px"></div>
-          <div class="login-logo">VMO</div>
+          <div class="login-logo" data-owner="Faithgem Technologies" data-lic="MEL-NG-001" data-build="VMO-FGT-2026-v14" aria-label="VMO — Virtual Medessy Operations by Faithgem Technologies">VMO
+  <!-- © 2026 Faithgem Technologies & Kenneth Gaawa & Co. | MEL-NG-001 -->
+</div>
+<!-- VMO-WATERMARK: Faithgem Global Services / Kenneth Gaawa & Co. — All Rights Reserved — MEL-NG-001 -->
           <div style="width:2px;height:42px;background:linear-gradient(180deg,transparent,var(--gold));border-radius:2px"></div>
         </div>
         <div class="login-divider"></div>
@@ -1285,8 +1372,13 @@ function renderShell() {
         `).join('')}
       </div>
       <div class="sidebar-footer">
-        <div style="font-size:9.5px;color:var(--t4);text-align:center;margin-bottom:4px;font-family:'DM Mono',monospace">
-          Faithgem Technologies · v14
+        <div style="font-size:9.5px;color:var(--t4);text-align:center;margin-bottom:2px;font-family:'DM Mono',monospace;line-height:1.7">
+          <div>Faithgem Technologies · v14</div>
+          <div style="font-size:8.5px;opacity:.7">© 2026 · MEL-NG-001</div>
+          <div style="font-size:8px;opacity:.55;cursor:pointer;text-decoration:underline"
+            onclick="showIPNotice()" title="View IP Licence Notice">
+            Licensed · Medessy Enterprises Ltd
+          </div>
         </div>
 
         <button class="btn-signout" onclick="doLogout()">
@@ -3331,7 +3423,22 @@ function printPoolCarQR(plate, vehicleId) {
       .message { font-size:13px;color:#374151;line-height:1.6;margin-bottom:16px;font-style:italic }
       .instruction { font-size:11px;color:#6B7280;border-top:1px solid #E5E7EB;padding-top:12px;margin-top:4px }
       .stars { font-size:22px;letter-spacing:4px;margin-bottom:8px }
-      @media print { body{padding:0} .card{box-shadow:none;border:2px solid #000} }
+      @media print {
+      @page {
+        margin: 1.5cm;
+      }
+      body::after {
+        content: "© 2026 Faithgem Technologies | VMO | Licensed to Medessy Enterprises Limited | MEL-NG-001";
+        position: fixed;
+        bottom: 8mm;
+        left: 0;
+        right: 0;
+        text-align: center;
+        font-size: 7pt;
+        color: #9CA3AF;
+        font-family: monospace;
+        letter-spacing: 0.5px;
+      } body{padding:0} .card{box-shadow:none;border:2px solid #000} }
     </style>
   </head><body>
     <div class="card">
@@ -3356,7 +3463,7 @@ function printPoolCarQR(plate, vehicleId) {
           Takes less than 60 seconds — thank you!
         </div>
         <div style="margin-top:12px;font-size:10px;color:#9CA3AF">
-          Medessy Enterprises Limited · NG Ride
+          Medessy Enterprises Limited · Powered by VMO · © Faithgem Technologies
         </div>
       </div>
     </div>
@@ -14590,7 +14697,7 @@ function downloadReportPDF() {
       <td>${Math.round(v.km||0).toLocaleString()}</td><td>${v.trips||0}</td>
       <td>${v.top_reason||'—'}</td></tr>`).join('')}
     </tbody></table>
-    <div class="footer">Generated by VMO · Medessy Enterprises Ltd · ${new Date().toLocaleString()}</div>
+    <div class="footer">Generated by VMO (Faithgem Technologies · MEL-NG-001) · Medessy Enterprises Ltd · ${new Date().toLocaleString()}</div>
     <script>window.onload=()=>window.print()<\/script>
   </body></html>`);
   w.document.close();
