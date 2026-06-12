@@ -1082,7 +1082,7 @@ const ALL_PAGES = [
   { id:'clients',      icon:'ti-building',        label:'Clients',        section:'Finance' },
   { id:'receivables',  icon:'ti-receipt',         label:'Receivables',    section:'Finance' },
   { id:'imprest',      icon:'ti-wallet',          label:'Imprest',        section:'Finance' },
-  { id:'balance',      icon:'ti-report-analytics',label:'Balance Sheet',  section:'Finance' },
+  { id:'balance',      icon:'ti-report-analytics',label:'Cash Flow Overview',  section:'Finance' },
   { id:'inventory',    icon:'ti-package',         label:'Store',          section:'Operations' },
   { id:'companies',    icon:'ti-building-factory',label:'Companies/Units',section:'Operations' },
   { id:'trips',        icon:'ti-map-route',       label:'Trip Log',       section:'Operations' },
@@ -1337,7 +1337,7 @@ function navigate(p) {
   document.querySelectorAll('[data-btab]').forEach(b => b.classList.toggle('active', b.dataset.btab === p));
   // Update title
   const pg = ALL_PAGES.find(x => x.id === p);
-  const titles = {dashboard:'Dashboard',issues:'Issues & Complaints',requests:'Payment Requests',fuel:'Fuel Requests',vehicles:'Vehicles',drivers:'Drivers',clients:'Clients',receivables:'Receivables',imprest:'Imprest Accounts',reservations:'Pool Cars',inventory:'Store',compliance:'Compliance',chat:'Team Chat',users:'Users',departments:'Departments',audit:'Audit Log',availability:'Fleet Availability',trips:'Trip Log',companies:'Companies & Units',history:'History & Export',maintenance:'Maintenance Tracker',meetings:'Meetings & Calls',balance:'Balance Sheet'};
+  const titles = {dashboard:'Dashboard',issues:'Issues & Complaints',requests:'Payment Requests',fuel:'Fuel Requests',vehicles:'Vehicles',drivers:'Drivers',clients:'Clients',receivables:'Receivables',imprest:'Imprest Accounts',reservations:'Pool Cars',inventory:'Store',compliance:'Compliance',chat:'Team Chat',users:'Users',departments:'Departments',audit:'Audit Log',availability:'Fleet Availability',trips:'Trip Log',companies:'Companies & Units',history:'History & Export',maintenance:'Maintenance Tracker',meetings:'Meetings & Calls',balance:'Cash Flow Overview'};
   html('page-title', titles[p] || p);
   html('topbar-btn', '');
   // Only show spinner if page is not cached
@@ -11755,8 +11755,8 @@ async function loadBalanceSheet() {
     <!-- Month heading -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:8px">
       <div>
-        <div style="font-family:'Fraunces',serif;font-size:22px;font-weight:900;color:var(--t1)">Balance Sheet</div>
-        <div style="font-size:12px;color:var(--t3)">${new Date(month+'-15').toLocaleDateString('en-GB',{month:'long',year:'numeric'})} · Auto-generated from live data</div>
+        <div style="font-family:'Fraunces',serif;font-size:22px;font-weight:900;color:var(--t1)">Cash Flow Overview</div>
+        <div style="font-size:12px;color:var(--t3)">${new Date(month+'-15').toLocaleDateString('en-GB',{month:'long',year:'numeric'})} · Live view of income, expenditure and cash position</div>
       </div>
       <div style="font-size:10px;color:var(--t4);font-family:'DM Mono',monospace">Last updated: ${new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div>
     </div>
