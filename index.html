@@ -1803,6 +1803,112 @@ async function checkMeetingReminders() {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+
+// ── USER PROFILE EDITOR ───────────────────────────────────────────────────────
+async function showUserProfile(userId) {
+  const uid = userId || user?.id;
+  if (!uid) return;
+  const isSelf = uid == user?.id;
+
+  showModal(isSelf ? '👤 My Profile' : '👤 Edit User Profile', `
+    <div style="text-align:center;padding:8px 0 18px">
+      <div class="spinner" style="margin:0 auto 8px"></div>
+      <div style="font-size:13px;color:var(--text3)">Loading profile…</div>
+    </div>`);
+
+  const profile = await api('GET', `/api/users/${uid}/profile`).catch(() => null);
+  const modal = document.querySelector('.modal-body');
+  if (!modal || !profile) return;
+
+  modal.innerHTML = `
+    <!-- Avatar -->
+    <div style="text-align:center;margin-bottom:20px">
+      <div id="prof-avatar-preview" style="width:80px;height:80px;border-radius:50%;margin:0 auto 10px;
+           background:var(--bg2);border:3px solid var(--gold);overflow:hidden;display:flex;
+           align-items:center;justify-content:center;font-size:28px;font-weight:700;color:var(--gold)">
+        ${profile.avatar_url
+          ? `<img src="${sanitise(profile.avatar_url)}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'">`
+          : (profile.full_name||'?')[0].toUpperCase()}
+      </div>
+      <div style="font-size:17px;font-weight:700;color:var(--text)">${sanitise(profile.full_name||'')}</div>
+      <div style="font-size:12px;color:var(--text3)">${sanitise(profile.role||'')}</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Profile Picture URL</label>
+      <input class="form-input" id="prof-avatar" placeholder="Paste image URL or upload link"
+        value="${sanitise(profile.avatar_url||'')}"
+        onchange="document.getElementById('prof-avatar-preview').innerHTML=this.value?
+          '<img src=\''+this.value+'\' style=\'width:100%;height:100%;object-fit:cover\'>':
+          '${(profile.full_name||'?')[0].toUpperCase()}'">
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">
+        Tip: Upload your photo to a service like Google Photos, Imgur, or LinkedIn and paste the direct image link.
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Job Title / Designation</label>
+        <input class="form-input" id="prof-job" placeholder="e.g. Fleet Supervisor"
+          value="${sanitise(profile.job_title||'')}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Department</label>
+        <input class="form-input" id="prof-dept" placeholder="e.g. Operations"
+          value="${sanitise(profile.department||'')}">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Phone Number</label>
+      <input class="form-input" id="prof-phone" placeholder="+234..."
+        value="${sanitise(profile.phone||'')}">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Short Bio</label>
+      <textarea class="form-input" id="prof-bio" rows="3"
+        placeholder="A brief description of your role and responsibilities at Medessy…"
+        style="resize:vertical">${sanitise(profile.bio||'')}</textarea>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">
+        Visible to colleagues on your profile card.
+      </div>
+    </div>
+
+    <button class="btn btn-primary" style="width:100%" onclick="saveUserProfile(${uid})">
+      <i class="ti ti-device-floppy"></i> Save Profile
+    </button>
+  `;
+}
+
+async function saveUserProfile(uid) {
+  const payload = {
+    avatar_url:  document.getElementById('prof-avatar')?.value?.trim() || null,
+    job_title:   document.getElementById('prof-job')?.value?.trim() || null,
+    department:  document.getElementById('prof-dept')?.value?.trim() || null,
+    phone:       document.getElementById('prof-phone')?.value?.trim() || null,
+    bio:         document.getElementById('prof-bio')?.value?.trim() || null,
+  };
+  try {
+    const updated = await api('PATCH', `/api/users/${uid}/profile`, payload);
+    showToast('Profile updated successfully ✅', 'success');
+    closeModal();
+    // Update the sidebar avatar if it is the current user
+    if (uid == user?.id) {
+      user = { ...user, ...updated };
+      sessionStorage.setItem('vmo_user', JSON.stringify(user));
+      // Refresh sidebar initials/avatar
+      const initEl = document.getElementById('user-initials');
+      if (initEl && updated.avatar_url) {
+        initEl.innerHTML = `<img src="${updated.avatar_url}" style="width:36px;height:36px;border-radius:50%;object-fit:cover" onerror="this.remove()">`;
+      }
+    }
+  } catch(e) {
+    showToast(e.message || 'Could not save profile. Please try again.', 'error');
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function pgDashboard() {
   const dash = await api('GET', '/api/analytics/dashboard').catch(() => ({}));
   const allowed = allowedPages().map(p => p.id);
@@ -12643,6 +12749,9 @@ async function submitScheduleMeeting() {
           <a href="${sanitise(result.meet_link)}" target="_blank" class="btn btn-primary" style="flex:1;text-align:center;text-decoration:none">
             <i class="ti ti-video"></i> Open Meeting
           </a>
+          <button class="btn btn-ghost btn-sm" onclick="downloadMeetingICS(${JSON.stringify({id:result.id,title:sanitise(title),scheduled_at:body.scheduled_at,duration_min:body.duration_min,meet_link:result.meet_link,agenda:body.agenda})})" title="Download calendar invite (.ics)">
+            <i class="ti ti-calendar-download"></i> Add to Calendar
+          </button>
           <button class="btn btn-ghost" onclick="closeModal();pgMeetings()">Done</button>
         </div>
       `);
@@ -12655,6 +12764,53 @@ async function submitScheduleMeeting() {
     showToast(e.message || 'Could not schedule meeting. Please try again.', 'error');
   }
 }
+
+// ── Generate and download ICS calendar invite ─────────────────────────────────
+function downloadMeetingICS(meeting) {
+  const start = new Date(meeting.scheduled_at);
+  const end   = new Date(start.getTime() + (meeting.duration_min || 60) * 60000);
+  const fmt   = d => d.toISOString().replace(/[-:]/g,'').slice(0,15) + 'Z';
+  const uid   = `vmo-mtg-${meeting.id || Date.now()}@medessy.ng`;
+  const desc  = (meeting.agenda ? 'Agenda: ' + meeting.agenda + '\n' : '') +
+                (meeting.meet_link ? 'Join: ' + meeting.meet_link : '');
+
+  const ics = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Faithgem Technologies//VMO//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:REQUEST',
+    'BEGIN:VEVENT',
+    `UID:${uid}`,
+    `DTSTART:${fmt(start)}`,
+    `DTEND:${fmt(end)}`,
+    `SUMMARY:${meeting.title}`,
+    `DESCRIPTION:${desc.replace(/\n/g,'\n')}`,
+    meeting.meet_link ? `URL:${meeting.meet_link}` : '',
+    meeting.meet_link ? `LOCATION:${meeting.meet_link}` : 'LOCATION:In-Person',
+    `BEGIN:VALARM`,
+    `TRIGGER:-PT15M`,
+    `ACTION:DISPLAY`,
+    `DESCRIPTION:Meeting starts in 15 minutes: ${meeting.title}`,
+    `END:VALARM`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].filter(Boolean).join('\r\n');
+
+  const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `VMO_Meeting_${meeting.title.replace(/[^a-z0-9]/gi,'_')}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('Calendar invite downloaded — open the .ics file to add to your calendar 📅', 'success');
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+
 // submitScheduleMeeting is now part of showScheduleMeeting above
 function startInstantMeeting(){
   const m={id:Date.now(),title:`Instant Meeting — ${new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`,host:user?.full_name||user?.name||'Host',scheduled:new Date().toISOString(),duration:0,status:'live',participants:[user?.full_name||user?.name||'Host'],agenda:'Instant meeting'};
