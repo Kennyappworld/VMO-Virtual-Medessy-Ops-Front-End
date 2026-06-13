@@ -1037,9 +1037,19 @@ let cache = {}; // in-memory cache; never persisted
 
 // ── MY PROFILE & SETTINGS ────────────────────────────────────────────────────
 async function showMyProfile() {
-  // Load full profile data
+  // Load full profile data + departments + companies in parallel
   let profile = {};
-  try { profile = await api('GET', '/api/profile'); } catch(e) { profile = user || {}; }
+  let departments = [];
+  let companies = [];
+  try {
+    [profile, departments, companies] = await Promise.all([
+      api('GET', '/api/profile').catch(() => user || {}),
+      api('GET', '/api/departments').catch(() => []),
+      api('GET', '/api/companies').catch(() => []),
+    ]);
+    window._deptsList = departments;
+    window._companiesList = companies;
+  } catch(e) { profile = user || {}; }
 
   const initials = avatar(profile.full_name || profile.name || 'U');
   const avatarUrl = profile.avatar_url;
@@ -1081,8 +1091,28 @@ async function showMyProfile() {
       </div>
       <div class="form-group">
         <label class="form-label">Department</label>
-        <input class="form-input" id="prof-dept" value="${sanitise(profile.department||'')}"
-          placeholder="e.g. Logistics, Finance, HR">
+        <select class="form-input" id="prof-dept-id">
+          <option value="">— Select Department —</option>
+          ${departments.map(d => `
+            <option value="${d.id}" ${(profile.department_id == d.id || profile.department === d.name) ? 'selected' : ''}>
+              ${sanitise(d.name)}${d.description ? ' — ' + sanitise(d.description) : ''}
+            </option>`).join('')}
+        </select>
+        ${!departments.length ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">No departments set up yet — Super Admin can create them under Admin > Departments.</div>` : ''}
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Company / Unit <span style="font-size:10px;color:var(--text3);font-weight:400">(optional — for non-central staff)</span></label>
+      <select class="form-input" id="prof-company-id">
+        <option value="">— Central Workforce (no specific unit) —</option>
+        ${companies.map(c => `
+          <option value="${c.id}" ${profile.company_id == c.id ? 'selected' : ''}>
+            ${sanitise(c.name)}${c.category ? ' (' + sanitise(c.category) + ')' : ''}
+          </option>`).join('')}
+      </select>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">
+        Assigning a unit links your activities (trips, fuel, compliance) to that company's records.
       </div>
     </div>
 
@@ -1163,11 +1193,16 @@ async function uploadProfileAvatar(input) {
 }
 
 async function saveMyProfile() {
+  const deptSel    = document.getElementById('prof-dept-id');
+  const companySel = document.getElementById('prof-company-id');
+  const deptName   = deptSel ? (deptSel.selectedOptions[0]?.text?.split(' — ')[0]?.trim() || '') : '';
   const payload = {
-    job_title:  document.getElementById('prof-title')?.value?.trim() || '',
-    department: document.getElementById('prof-dept')?.value?.trim() || '',
-    phone:      document.getElementById('prof-phone')?.value?.trim() || '',
-    bio:        document.getElementById('prof-bio')?.value?.trim() || '',
+    job_title:     document.getElementById('prof-title')?.value?.trim() || '',
+    department_id: deptSel?.value ? parseInt(deptSel.value) : null,
+    department:    deptName || null,
+    company_id:    companySel?.value ? parseInt(companySel.value) : null,
+    phone:         document.getElementById('prof-phone')?.value?.trim() || '',
+    bio:           document.getElementById('prof-bio')?.value?.trim() || '',
   };
 
   const pw  = document.getElementById('prof-pw')?.value;
@@ -10433,6 +10468,7 @@ async function pgTrips() {
         </button>`).join('')}
       <span id="open-trips-count" style="font-size:11px;color:var(--red);font-weight:700;padding:4px 8px;background:rgba(239,68,68,.1);border-radius:8px;display:none"></span>
     </div>
+    <div id="trip-age-banner"></div>
     <div id="trip-summary"></div>
     <div id="trip-list"><div class="loading-state"><div class="spinner"></div></div></div>
   `);
@@ -10447,12 +10483,38 @@ async function loadTripsForCompany() {
   const from = month + '-01';
   const to = month + '-31';
 
-  const [trips, summary] = await Promise.all([
+  const [tripsRaw, summary] = await Promise.all([
     api('GET',`/api/trips?${compId?'company_id='+compId+'&':''}from=${from}&to=${to}`).catch(()=>[]),
     api('GET',`/api/trips/summary?${compId?'company_id='+compId+'&':''}month=${month}`).catch(()=>({})),
   ]);
 
+  // Sort: open trips oldest first (most delayed at top), closed newest first
+  const _openT   = tripsRaw.filter(t => !['closed','completed','cancelled'].includes(t.trip_status||''));
+  const _closedT = tripsRaw.filter(t =>  ['closed','completed','cancelled'].includes(t.trip_status||''));
+  _openT.sort((a,b)   => new Date(a.trip_date||a.created_at) - new Date(b.trip_date||b.created_at));
+  _closedT.sort((a,b) => new Date(b.trip_date||b.created_at) - new Date(a.trip_date||a.created_at));
+  const trips = [..._openT, ..._closedT];
   window._currentTrips = trips;
+
+  // Age banner — shows overdue/critical open trips at top of page
+  const _ageBanner = document.getElementById('trip-age-banner');
+  if (_ageBanner && _openT.length) {
+    const _crit = _openT.filter(t => ageLabel(t.trip_date||t.created_at).severity === 'critical');
+    const _high = _openT.filter(t => ageLabel(t.trip_date||t.created_at).severity === 'high');
+    const _col  = _crit.length ? 'var(--red,#ef4444)' : _high.length ? 'var(--orange,#f97316)' : 'var(--amber,#f59e0b)';
+    if (_crit.length || _high.length) {
+      _ageBanner.innerHTML = '<div style="background:rgba(239,68,68,.08);border:1px solid '+_col+';border-radius:10px;padding:10px 16px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+        + '<span style="font-size:18px">'+(_crit.length?'🔴':'🟠')+'</span>'
+        + '<span style="font-weight:700;color:var(--text)">'+(_crit.length?_crit.length+' critically delayed truck'+((_crit.length>1)?'s':'')+' — immediate attention needed':_high.length+' overdue trip'+((_high.length>1)?'s':'')+' — action required')+'</span>'
+        + (_crit.length?'<span style="font-size:12px;color:var(--text3)">Most delayed: '+sanitise(_crit[0].plate_number||'—')+' — '+ageLabel(_crit[0].trip_date||_crit[0].created_at).label+'</span>':'')
+        + '<span style="margin-left:auto;font-size:12px;color:var(--text3)">'+_openT.length+' open trip'+(_openT.length>1?'s':'')+' total</span>'
+        + '</div>';
+    } else {
+      _ageBanner.innerHTML = '';
+    }
+  } else if (_ageBanner) {
+    _ageBanner.innerHTML = '';
+  }
 
   html('trip-summary', `
     <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
@@ -10479,7 +10541,7 @@ async function loadTripsForCompany() {
           <th>Status</th><th>Date</th><th>Waybill</th><th>Plate</th><th>Driver</th>
           <th>Company</th><th>From</th><th>To</th><th>Customer</th>
           <th style="text-align:right">Freight</th><th style="text-align:right">Diesel</th>
-          <th>Docs</th><th></th>
+          <th style="min-width:110px">Trip Age</th><th>Docs</th><th></th>
         </tr></thead>
         <tbody>
         ${trips.map(t => {
@@ -10505,6 +10567,14 @@ async function loadTripsForCompany() {
             <td style="font-size:11px">${sanitise(t.customer_name||'—')}</td>
             <td style="text-align:right;color:var(--green);font-weight:700">${fmt(freight)}</td>
             <td style="text-align:right;color:var(--amber);font-size:11px">${t.total_diesel||'—'}</td>
+            <td style="padding:8px 6px;white-space:nowrap;min-width:110px">
+              ${!isClosed
+                ? ageBar(t.trip_date || t.created_at,
+                    t.trip_status === 'loading'  ? 'loading at plant'  :
+                    t.trip_status === 'transit'  ? 'in transit'        :
+                    t.trip_status === 'returned' ? 'returned, not closed' : 'open trip')
+                : '<span style="font-size:10px;color:var(--text3)">Closed</span>'}
+            </td>
             <td style="font-size:10px;white-space:nowrap">
               ${loadDocs>0?`<span style="color:var(--green)">📎${loadDocs}</span>`:'<span style="color:var(--red)">⚠ No WB</span>'}
               ${closeDocs>0?`<span style="color:var(--blue);margin-left:4px">✓${closeDocs}</span>`:''}
