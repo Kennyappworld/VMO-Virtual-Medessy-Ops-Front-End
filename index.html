@@ -1357,6 +1357,7 @@ const ALL_PAGES = [
   { id:'chat',         icon:'ti-message-circle',  label:'Chat',           section:'Team' },
   { id:'meetings',     icon:'ti-video',           label:'Meetings',       section:'Team' },
   { id:'users',        icon:'ti-users',           label:'Users',          section:'Admin' },
+  { id:'permissions',  icon:'ti-lock-access',     label:'Access Control',  section:'Admin' },
   { id:'departments',  icon:'ti-building-community',label:'Departments',  section:'Admin' },
   { id:'audit',        icon:'ti-history',         label:'Audit Log',      section:'Admin' },
   { id:'history',      icon:'ti-table-export',    label:'History & Export',section:'Admin' },
@@ -1365,6 +1366,7 @@ const ALL_PAGES = [
   { id:'locations',    icon:'ti-map-pin',         label:'Store Locations', section:'Admin' },
   { id:'my-trips',     icon:'ti-road',            label:'My Trips',        section:'Main' },
   { id:'my-tasks',     icon:'ti-checklist',       label:'My Tasks',        section:'Main' },
+  { id:'permissions',  icon:'ti-lock-access',     label:'Access Control',  section:'Admin' },
 ];
 
 const ROLE_PAGES = {
@@ -1386,8 +1388,31 @@ const ROLE_PAGES = {
 };
 
 function allowedPages() {
+  // If super admin has saved custom permissions for this role, use those
+  const livePerms = window._rolePerms;
+  if (livePerms && user?.role && livePerms[user.role]) {
+    return ALL_PAGES.filter(p => livePerms[user.role].includes(p.id));
+  }
   const allowed = ROLE_PAGES[user?.role] || ROLE_PAGES.staff;
   return ALL_PAGES.filter(p => allowed.includes(p.id));
+}
+
+// Load live role permissions from backend (called after login)
+async function loadRolePerms() {
+  if (!['super_admin','real_admin','admin'].includes(user?.role)) {
+    // For non-admins, fetch just their role's custom permissions if set
+    try {
+      const perms = await api('GET', '/api/role-permissions').catch(() => null);
+      if (perms && perms[user.role]) {
+        window._rolePerms = perms;
+      }
+    } catch(e) {}
+    return;
+  }
+  try {
+    const perms = await api('GET', '/api/role-permissions').catch(() => null);
+    if (perms) window._rolePerms = perms;
+  } catch(e) {}
 }
 
 // Bottom nav shows max 5 most important pages for this role
@@ -1492,6 +1517,8 @@ async function doLogin() {
     render();
     preloadAll();
     // Accountability check — shown after render so dashboard is visible behind modal
+    // Load any super-admin-defined role permission overrides
+    loadRolePerms().catch(() => {});
     setTimeout(() => runAccountabilityCheck(), 800);
   } catch(e) {
     btn.disabled = false;
@@ -1654,6 +1681,7 @@ async function loadPage(p) {
     else if (p==='chat') { delete cache['GET/api/chat/groups']; await pgChat(); }
     else if (p==='users') await pgUsers();
     else if (p==='audit') { delete cache['GET/api/audit']; await pgAudit(); }
+    else if (p==='permissions') await pgRolePermissions();
     else if (p==='history') await pgHistory();
     else if (p==='invoices') await pgInvoices();
     else if (p==='budget') await pgBudget();
@@ -10169,6 +10197,215 @@ async function loadDriverAlerts() {
 
 
 // ── AUDIT ─────────────────────────────────────────────────────────────────────
+async function pgRolePermissions() {
+  if (!['super_admin','real_admin'].includes(user?.role)) {
+    html('page-content', `<div class="empty-state"><div class="empty-icon"><i class="ti ti-lock"></i></div>
+      <div class="empty-title">Admin only</div>
+      <div class="empty-sub">Access control settings are restricted to Super Admin.</div></div>`);
+    return;
+  }
+
+  html('topbar-btn', '');
+  html('page-content', `<div style="text-align:center;padding:40px;color:var(--text3)"><span class="spinner"></span> Loading permissions…</div>`);
+
+  // Load current saved permissions from backend (may be empty if never customised)
+  const saved = await api('GET', '/api/role-permissions').catch(() => ({}));
+
+  // Merge: saved overrides take precedence, otherwise fall back to ROLE_PAGES defaults
+  const effectivePerms = {};
+  const editableRoles = ['hr','accounts','compliance','operations_manager','haulage_manager',
+    'pool_manager','logistics_supervisor','driver','store_keeper','store_manager',
+    'maintenance_manager','staff'];
+
+  editableRoles.forEach(role => {
+    effectivePerms[role] = saved[role] || ROLE_PAGES[role] || ['dashboard'];
+  });
+
+  // Group pages by section for organised display
+  const sections = {};
+  ALL_PAGES.filter(p => !['my-trips','my-tasks'].includes(p.id)).forEach(p => {
+    if (!sections[p.section]) sections[p.section] = [];
+    sections[p.section].push(p);
+  });
+
+  const roleLabels = {
+    hr: 'HR', accounts: 'Accounts', compliance: 'Compliance',
+    operations_manager: 'Operations Manager', haulage_manager: 'Haulage Manager',
+    pool_manager: 'Pool Manager', logistics_supervisor: 'Logistics Supervisor',
+    driver: 'Driver', store_keeper: 'Store Keeper', store_manager: 'Store Manager',
+    maintenance_manager: 'Maintenance Manager', staff: 'Staff',
+  };
+
+  // Roles that should always have dashboard (can't be removed)
+  const alwaysOn = ['dashboard'];
+
+  html('page-content', `
+    <div style="margin-bottom:16px">
+      <p style="font-size:13px;color:var(--text3);line-height:1.6">
+        Toggle which pages each role can see. Changes take effect the next time that user logs in or refreshes.
+        <strong style="color:var(--amber)"> Super Admin, Admin, and Real Admin always have full access and cannot be restricted.</strong>
+      </p>
+    </div>
+
+    <!-- Role selector tabs -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px" id="perm-role-tabs">
+      ${editableRoles.map((r,i) => `
+        <button class="group-chip ${i===0?'active':''}" data-prole="${r}"
+          onclick="switchPermRole('${r}')" style="font-size:11px">
+          ${roleLabels[r]}
+        </button>`).join('')}
+    </div>
+
+    <!-- Permission grid — shown per role -->
+    <div id="perm-grid-wrap">
+      ${editableRoles.map((role, ri) => `
+        <div id="perm-grid-${role}" style="display:${ri===0?'block':'none'}">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+            <div>
+              <span style="font-size:16px;font-weight:700;color:var(--text)">${roleLabels[role]}</span>
+              <span style="font-size:12px;color:var(--text3);margin-left:8px" id="perm-count-${role}">
+                ${effectivePerms[role].length} pages enabled
+              </span>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-ghost btn-sm" onclick="permSelectAll('${role}', true)">
+                <i class="ti ti-check-all"></i> Enable All
+              </button>
+              <button class="btn btn-ghost btn-sm" onclick="permSelectAll('${role}', false)">
+                <i class="ti ti-x"></i> Reset to Minimum
+              </button>
+              <button class="btn btn-primary btn-sm" id="perm-save-${role}" onclick="saveRolePerms('${role}')">
+                <i class="ti ti-device-floppy"></i> Save Changes
+              </button>
+            </div>
+          </div>
+
+          ${Object.entries(sections).map(([section, pages]) => `
+            <div style="margin-bottom:16px">
+              <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;
+                          letter-spacing:.8px;margin-bottom:8px;padding-bottom:4px;
+                          border-bottom:1px solid var(--border)">${section}</div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
+                ${pages.map(page => {
+                  const isOn = effectivePerms[role].includes(page.id);
+                  const locked = alwaysOn.includes(page.id);
+                  return `
+                  <label class="perm-toggle-card ${isOn ? 'on' : ''} ${locked ? 'locked' : ''}"
+                    id="perm-card-${role}-${page.id}"
+                    style="display:flex;align-items:center;gap:10px;padding:10px 12px;
+                           border-radius:var(--r-md);border:1px solid ${isOn ? 'rgba(201,168,76,.4)' : 'var(--border)'};
+                           background:${isOn ? 'rgba(201,168,76,.08)' : 'var(--ink2)'};
+                           cursor:${locked ? 'not-allowed' : 'pointer'};
+                           transition:.15s;user-select:none"
+                    onclick="${locked ? '' : `togglePerm('${role}','${page.id}',this)`}">
+                    <div style="flex-shrink:0;width:36px;height:20px;border-radius:10px;
+                                background:${isOn ? 'var(--amber)' : 'var(--ink3)'};
+                                border:1px solid ${isOn ? 'var(--gold)' : 'var(--border)'};
+                                position:relative;transition:.2s" class="perm-pill">
+                      <div style="width:14px;height:14px;border-radius:50%;background:#fff;
+                                  position:absolute;top:2px;left:${isOn ? '18px' : '2px'};
+                                  transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.3)" class="perm-dot"></div>
+                    </div>
+                    <div style="flex:1;min-width:0">
+                      <div style="font-size:12px;font-weight:600;color:${isOn ? 'var(--text)' : 'var(--text3)'};
+                                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                        <i class="ti ${page.icon}" style="margin-right:4px;font-size:11px"></i>${page.label}
+                      </div>
+                      ${locked ? '<div style="font-size:10px;color:var(--text3)">Always on</div>' : ''}
+                    </div>
+                  </label>`;
+                }).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `).join('')}
+    </div>
+  `);
+
+  // Store live state for JS manipulation
+  window._permState = JSON.parse(JSON.stringify(effectivePerms));
+}
+
+function switchPermRole(role) {
+  document.querySelectorAll('[data-prole]').forEach(b => b.classList.toggle('active', b.dataset.prole === role));
+  document.querySelectorAll('[id^="perm-grid-"]').forEach(el => el.style.display = 'none');
+  const grid = document.getElementById(`perm-grid-${role}`);
+  if (grid) grid.style.display = 'block';
+}
+
+function togglePerm(role, pageId, card) {
+  if (!window._permState) return;
+  const pages = window._permState[role] || [];
+  const idx = pages.indexOf(pageId);
+  const nowOn = idx === -1;
+  if (nowOn) { pages.push(pageId); } else { pages.splice(idx, 1); }
+  window._permState[role] = pages;
+
+  // Update card visual
+  card.style.background = nowOn ? 'rgba(201,168,76,.08)' : 'var(--ink2)';
+  card.style.borderColor = nowOn ? 'rgba(201,168,76,.4)' : 'var(--border)';
+  const pill = card.querySelector('.perm-pill');
+  const dot  = card.querySelector('.perm-dot');
+  const label = card.querySelector('div[style*="font-size:12px"]');
+  if (pill) { pill.style.background = nowOn ? 'var(--amber)' : 'var(--ink3)'; pill.style.borderColor = nowOn ? 'var(--gold)' : 'var(--border)'; }
+  if (dot)  { dot.style.left = nowOn ? '18px' : '2px'; }
+  if (label) { label.style.color = nowOn ? 'var(--text)' : 'var(--text3)'; }
+
+  // Update count
+  const countEl = document.getElementById(`perm-count-${role}`);
+  if (countEl) countEl.textContent = `${window._permState[role].length} pages enabled`;
+
+  // Mark save button as unsaved
+  const saveBtn = document.getElementById(`perm-save-${role}`);
+  if (saveBtn && !saveBtn.dataset.dirty) {
+    saveBtn.dataset.dirty = '1';
+    saveBtn.innerHTML = '<i class="ti ti-device-floppy"></i> Save Changes •';
+    saveBtn.style.background = 'var(--amber)';
+    saveBtn.style.color = '#000';
+  }
+}
+
+function permSelectAll(role, enable) {
+  if (!window._permState) return;
+  const all = ALL_PAGES.filter(p => !['my-trips','my-tasks'].includes(p.id)).map(p => p.id);
+  window._permState[role] = enable ? [...all] : ['dashboard'];
+  // Refresh the grid
+  pgRolePermissions();
+  // Re-select the same role tab after re-render
+  setTimeout(() => switchPermRole(role), 50);
+}
+
+async function saveRolePerms(role) {
+  if (!window._permState) return;
+  const pages = window._permState[role] || ['dashboard'];
+  // Always ensure dashboard is in there
+  if (!pages.includes('dashboard')) pages.unshift('dashboard');
+
+  const btn = document.getElementById(`perm-save-${role}`);
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader ti-spin"></i> Saving…'; }
+
+  try {
+    await api('PUT', `/api/role-permissions/${role}`, { pages });
+    // Update live cache so existing sessions benefit immediately
+    if (!window._rolePerms) window._rolePerms = {};
+    window._rolePerms[role] = pages;
+
+    if (btn) {
+      btn.disabled = false;
+      btn.dataset.dirty = '';
+      btn.style.background = '';
+      btn.style.color = '';
+      btn.innerHTML = '<i class="ti ti-check"></i> Saved';
+      setTimeout(() => { if (btn) btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save Changes'; }, 2500);
+    }
+    showToast(`Access settings for ${role.replace(/_/g,' ')} saved`, 'success');
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save Changes •'; }
+    showToast(e.message || 'Could not save — please try again', 'error');
+  }
+}
+
 async function pgAudit() {
   const data = await api('GET', '/api/audit').catch(() => []);
   html('page-content', `
