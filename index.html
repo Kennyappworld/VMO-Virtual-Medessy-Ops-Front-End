@@ -1499,6 +1499,8 @@ async function doLogin() {
     page = 'dashboard';
     render();
     preloadAll();
+    // Accountability check — shown after render so dashboard is visible behind modal
+    setTimeout(() => runAccountabilityCheck(), 800);
   } catch(e) {
     btn.disabled = false;
     btn.innerHTML = '<i class="ti ti-lock"></i> Sign in to VMO';
@@ -2214,6 +2216,364 @@ async function loadPendingAgeWidget() {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ACCOUNTABILITY CHECK SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _acctCheckDone = false; // prevents double-show in same session
+
+async function runAccountabilityCheck() {
+  if (_acctCheckDone) return;
+  // Skip for vendor roles — they have no internal tasks
+  if (['vendor_admin','dispenser'].includes(user?.role)) return;
+
+  try {
+    const data = await api('GET', '/api/accountability/today').catch(() => null);
+    if (!data) return;
+
+    // If already checked today, just show a reminder banner if they have open items
+    if (data.already_checked) {
+      if (data.open_items?.length > 0) {
+        showAccountabilityReminder(data.open_items);
+      }
+      _acctCheckDone = true;
+      return;
+    }
+
+    // Not yet checked today — show the accountability modal
+    showAccountabilityModal(data);
+    _acctCheckDone = true;
+  } catch(e) {
+    console.warn('[Accountability]', e.message);
+  }
+}
+
+function showAccountabilityModal(data) {
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const userName = user?.full_name?.split(' ')[0] || 'there';
+  const openItems = data.open_items || [];
+  const sysPending = data.system_pending || [];
+  const hasAnyPending = openItems.length > 0 || sysPending.length > 0;
+  const fmt = d => d ? new Date(d).toLocaleDateString('en-GB', { day:'2-digit', month:'short' }) : '—';
+
+  // Build the content — this modal is NOT easily dismissed
+  const modalContent = `
+    <div style="text-align:center;margin-bottom:20px">
+      <div style="font-size:36px;margin-bottom:8px">👋</div>
+      <div style="font-size:20px;font-weight:800;color:var(--text)">${greeting}, ${sanitise(userName)}!</div>
+      <div style="font-size:13px;color:var(--text3);margin-top:4px">
+        ${new Date().toLocaleDateString('en-GB',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})}
+      </div>
+    </div>
+
+    <!-- Existing open items from previous checks -->
+    ${openItems.length > 0 ? `
+    <div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:10px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-weight:700;color:var(--red,#ef4444);font-size:13px;margin-bottom:8px">
+        🔴 You have ${openItems.length} unresolved item${openItems.length>1?'s':''} carried forward
+      </div>
+      ${openItems.map(item => `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(239,68,68,.12)">
+          <span style="font-size:11px;flex:1;color:var(--text)">${sanitise(item.title)}</span>
+          <span style="font-size:10px;color:${item.overdue?'var(--red,#ef4444)':'var(--text3)'}">
+            ${item.delivery_date ? (item.overdue ? '🔴 Due: '+fmt(item.delivery_date) : '📅 By: '+fmt(item.delivery_date)) : 'No deadline set'}
+          </span>
+          <button style="background:rgba(16,185,129,.15);border:none;border-radius:6px;color:#10b981;
+                  font-size:10px;padding:3px 8px;cursor:pointer" onclick="resolveAccountabilityItem(${item.id})">
+            ✓ Done
+          </button>
+        </div>`).join('')}
+    </div>` : ''}
+
+    <!-- System-detected pending items -->
+    ${sysPending.length > 0 ? `
+    <div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.25);border-radius:10px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-weight:700;color:var(--amber,#f59e0b);font-size:13px;margin-bottom:8px">
+        ⚠ System detected ${sysPending.length} item${sysPending.length>1?'s':''} needing your attention
+      </div>
+      ${sysPending.map(item => `
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 0">
+          <span style="font-size:10px;padding:1px 7px;border-radius:10px;background:rgba(245,158,11,.15);color:var(--amber)">${sanitise(item.category)}</span>
+          <span style="font-size:12px;color:var(--text2)">${sanitise(item.title)}</span>
+        </div>`).join('')}
+    </div>` : ''}
+
+    <!-- The question -->
+    <div style="background:var(--bg2);border-radius:10px;padding:14px 16px;margin-bottom:16px">
+      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">
+        Do you have any pending tasks or incomplete deliverables as at end of business yesterday?
+      </div>
+      <div style="font-size:12px;color:var(--text3);line-height:1.6">
+        Be honest — this keeps the team aligned and helps management support you. 
+        Items you declare will be tracked and followed up by operations.
+      </div>
+    </div>
+
+    <!-- Add pending items section (shown when Yes is clicked) -->
+    <div id="acct-items-section" style="display:none">
+      <div style="font-weight:600;font-size:13px;color:var(--text);margin-bottom:10px">
+        📝 Tell us what's pending — add each item:
+      </div>
+      <div id="acct-items-list"></div>
+      <button onclick="addAccountabilityItem()"
+        style="width:100%;background:none;border:1px dashed var(--border);border-radius:8px;
+               color:var(--accent);padding:8px;font-size:12px;cursor:pointer;margin-bottom:14px">
+        + Add Another Item
+      </button>
+    </div>
+
+    <!-- Action buttons -->
+    <div id="acct-action-btns" style="display:flex;gap:10px">
+      <button class="btn btn-success" style="flex:1" onclick="submitAccountabilityCheck(false)">
+        <i class="ti ti-circle-check"></i> All Clear — No Pending Items
+      </button>
+      <button class="btn btn-danger" style="flex:1" onclick="showAccountabilityItemForm()">
+        <i class="ti ti-alert-triangle"></i> Yes, I Have Pending Items
+      </button>
+    </div>
+    <div style="text-align:center;margin-top:10px;font-size:11px;color:var(--text3)">
+      This check is logged. You cannot skip it — your response is recorded for operations review.
+    </div>
+  `;
+
+  // Show in a non-dismissible modal (no X button, no click-outside-to-close)
+  showModal('Daily Accountability Check', modalContent, { noDismiss: true });
+}
+
+let _acctItemCount = 0;
+
+function showAccountabilityItemForm() {
+  document.getElementById('acct-action-btns').style.display = 'none';
+  const section = document.getElementById('acct-items-section');
+  section.style.display = 'block';
+  addAccountabilityItem(); // Add first item row
+
+  // Add submit button
+  section.insertAdjacentHTML('afterend', `
+    <button class="btn btn-primary" style="width:100%" onclick="submitAccountabilityCheck(true)">
+      <i class="ti ti-device-floppy"></i> Save Pending Items & Continue
+    </button>
+    <div style="font-size:11px;color:var(--text3);text-align:center;margin-top:6px">
+      Operations will follow up on items past their delivery date.
+    </div>
+  `);
+}
+
+function addAccountabilityItem() {
+  const idx = _acctItemCount++;
+  const list = document.getElementById('acct-items-list');
+  if (!list) return;
+
+  const CATEGORIES = ['Task','Trip','Compliance','Maintenance','Documentation','Finance','Other'];
+  const div = document.createElement('div');
+  div.id = `acct-item-${idx}`;
+  div.style.cssText = 'background:var(--bg2);border-radius:8px;padding:12px;margin-bottom:10px;position:relative';
+  div.innerHTML = `
+    <button onclick="document.getElementById('acct-item-${idx}').remove()"
+      style="position:absolute;top:8px;right:8px;background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px">✕</button>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+      <div>
+        <label style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Category</label>
+        <select class="form-input" id="acct-cat-${idx}" style="margin-top:3px">
+          ${CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Delivery Date *</label>
+        <input type="date" class="form-input" id="acct-date-${idx}" style="margin-top:3px"
+          min="${new Date().toISOString().slice(0,10)}">
+      </div>
+    </div>
+    <div>
+      <label style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">What is pending? *</label>
+      <input type="text" class="form-input" id="acct-title-${idx}" style="margin-top:3px"
+        placeholder="e.g. Close trip for ABC-123-XY, Submit fuel report for week ending...">
+    </div>
+    <div style="margin-top:8px">
+      <label style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Additional details (optional)</label>
+      <input type="text" class="form-input" id="acct-desc-${idx}" style="margin-top:3px"
+        placeholder="Any context, blockers, or notes...">
+    </div>
+  `;
+  list.appendChild(div);
+}
+
+async function submitAccountabilityCheck(hasPending) {
+  const items = [];
+
+  if (hasPending) {
+    // Collect all item rows
+    const list = document.getElementById('acct-items-list');
+    if (!list) return;
+    let valid = true;
+    list.querySelectorAll('[id^="acct-item-"]').forEach(div => {
+      const idx = div.id.replace('acct-item-', '');
+      const title = document.getElementById(`acct-title-${idx}`)?.value?.trim();
+      const date  = document.getElementById(`acct-date-${idx}`)?.value;
+      const cat   = document.getElementById(`acct-cat-${idx}`)?.value;
+      const desc  = document.getElementById(`acct-desc-${idx}`)?.value?.trim();
+      if (!title) {
+        document.getElementById(`acct-title-${idx}`)?.style && (document.getElementById(`acct-title-${idx}`).style.outline = '2px solid var(--red,#ef4444)');
+        valid = false;
+        return;
+      }
+      items.push({ title, category: cat, delivery_date: date || null, description: desc || null });
+    });
+
+    if (!valid || items.length === 0) {
+      showToast('Please fill in at least one pending item with a title.', 'error');
+      return;
+    }
+  }
+
+  try {
+    await api('POST', '/api/accountability/check', { has_pending: hasPending, items });
+    closeModal();
+    _acctItemCount = 0;
+
+    if (hasPending) {
+      showToast(
+        `Noted — ${items.length} pending item${items.length>1?'s':''} recorded. Operations will follow up on overdue items. ✅`,
+        'success'
+      );
+    } else {
+      showToast('All clear logged. Have a productive day! 💪', 'success');
+    }
+
+    // Refresh dashboard accountability widget
+    if (window._currentPage === 'dashboard') {
+      loadAccountabilityAdminWidget();
+    }
+  } catch(e) {
+    showToast(e.message || 'Could not save your check. Please try again.', 'error');
+  }
+}
+
+async function resolveAccountabilityItem(itemId) {
+  try {
+    await api('PATCH', `/api/accountability/items/${itemId}/resolve`, {});
+    showToast('Item marked as resolved ✅', 'success');
+    // Refresh the modal
+    closeModal();
+    setTimeout(() => runAccountabilityCheck(), 200);
+  } catch(e) {
+    showToast('Could not resolve item. Please try again.', 'error');
+  }
+}
+
+function showAccountabilityReminder(openItems) {
+  // Soft banner (dismissible) when user has open items but already checked in today
+  const overdue = openItems.filter(i => i.overdue);
+  if (!overdue.length && openItems.length === 0) return;
+
+  const urgentColor = overdue.length ? 'var(--red,#ef4444)' : 'var(--amber,#f59e0b)';
+  const container = document.getElementById('pending-age-widget') || document.getElementById('dashboard-alerts');
+  if (!container) return;
+
+  const existing = document.getElementById('acct-reminder-banner');
+  if (existing) existing.remove();
+
+  const banner = document.createElement('div');
+  banner.id = 'acct-reminder-banner';
+  banner.style.cssText = `border-left:3px solid ${urgentColor};background:rgba(239,68,68,.06);border-radius:10px;padding:12px 16px;margin-bottom:14px`;
+  banner.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <span style="font-size:15px">${overdue.length ? '🔴' : '⚠'}</span>
+      <span style="font-weight:700;font-size:13px;color:var(--text)">
+        You have ${openItems.length} pending item${openItems.length>1?'s':''} to complete
+        ${overdue.length ? ` — <span style="color:var(--red,#ef4444)">${overdue.length} overdue</span>` : ''}
+      </span>
+      <button onclick="document.getElementById('acct-reminder-banner').remove()"
+        style="margin-left:auto;background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px">✕</button>
+    </div>
+    <div style="font-size:12px;color:var(--text3)">
+      ${openItems.slice(0,3).map(i => `• ${sanitise(i.title)}`).join(' &nbsp; ')}
+      ${openItems.length > 3 ? ` <em>+${openItems.length-3} more</em>` : ''}
+    </div>`;
+  container.insertBefore(banner, container.firstChild);
+}
+
+// Admin dashboard widget — who has unresolved/overdue items
+async function loadAccountabilityAdminWidget() {
+  const w = document.getElementById('accountability-admin-widget');
+  if (!w) return;
+  if (!['super_admin','admin','haulage_manager','operations_manager','hr'].includes(user?.role)) {
+    w.innerHTML = ''; return;
+  }
+
+  try {
+    const data = await api('GET', '/api/accountability/admin').catch(() => null);
+    if (!data) { w.innerHTML = ''; return; }
+
+    const { not_checked_in = [], overdue_items = [], summary = {} } = data;
+    const total = overdue_items.length + not_checked_in.length;
+    if (!total) { w.innerHTML = ''; return; }
+
+    const fmt = d => d ? new Date(d).toLocaleDateString('en-GB', { day:'2-digit', month:'short' }) : '—';
+    const fmtAge = d => {
+      const days = Math.floor((Date.now() - new Date(d)) / 86400000);
+      return days === 0 ? 'today' : days === 1 ? '1 day ago' : days + ' days ago';
+    };
+
+    // Group overdue by user
+    const byUser = {};
+    overdue_items.forEach(item => {
+      if (!byUser[item.uid]) byUser[item.uid] = { name: item.full_name, role: item.role, dept: item.department, email: item.email, phone: item.phone, items: [] };
+      byUser[item.uid].items.push(item);
+    });
+
+    w.innerHTML = `
+      <div class="card" style="border-left:3px solid var(--red,#ef4444);margin-bottom:14px;padding:14px 16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+          <span style="font-size:18px">📋</span>
+          <span style="font-weight:700;font-size:14px;color:var(--text)">Accountability Follow-Up Required</span>
+          ${overdue_items.length ? `<span style="font-size:11px;padding:2px 10px;border-radius:20px;background:rgba(239,68,68,.12);color:var(--red,#ef4444);font-weight:700">${overdue_items.length} overdue item${overdue_items.length>1?'s':''}</span>` : ''}
+          ${not_checked_in.length ? `<span style="font-size:11px;padding:2px 10px;border-radius:20px;background:rgba(245,158,11,.12);color:var(--amber,#f59e0b);font-weight:700">${not_checked_in.length} not checked in today</span>` : ''}
+          <span style="margin-left:auto;font-size:11px;color:var(--text3)">${summary.checked_today||0} checked in today</span>
+        </div>
+
+        ${Object.values(byUser).length ? `
+        <div style="margin-bottom:12px">
+          <div style="font-size:11px;font-weight:700;color:var(--red,#ef4444);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🔴 Overdue — Operations Follow Up Needed</div>
+          ${Object.values(byUser).map(u => `
+            <div style="background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+                <span style="font-weight:700;font-size:13px;color:var(--text)">${sanitise(u.name)}</span>
+                <span style="font-size:10px;color:var(--text3)">${sanitise(u.role)} · ${sanitise(u.dept||'—')}</span>
+                <span style="font-size:11px;padding:1px 8px;border-radius:10px;background:rgba(239,68,68,.15);color:var(--red,#ef4444);font-weight:600;margin-left:auto">${u.items.length} overdue</span>
+              </div>
+              ${u.items.map(item => `
+                <div style="font-size:11px;color:var(--text2);padding:3px 0;display:flex;align-items:center;gap:8px">
+                  <span style="color:var(--red,#ef4444)">•</span>
+                  <span style="flex:1">${sanitise(item.title)}</span>
+                  <span style="color:var(--red,#ef4444);font-size:10px;white-space:nowrap">Due: ${fmt(item.delivery_date)}</span>
+                </div>`).join('')}
+              ${u.phone||u.email ? `<div style="margin-top:8px;font-size:11px;color:var(--text3)">
+                Contact: ${u.phone ? `<a href="tel:${sanitise(u.phone)}" style="color:var(--accent)">${sanitise(u.phone)}</a>` : sanitise(u.email||'')}
+              </div>` : ''}
+            </div>`).join('')}
+        </div>` : ''}
+
+        ${not_checked_in.length ? `
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--amber,#f59e0b);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">⚠ Not Checked In Today</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            ${not_checked_in.map(u => `
+              <span style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:6px;
+                    padding:3px 10px;font-size:11px;color:var(--text2)">
+                ${sanitise(u.full_name)} <span style="color:var(--text3);font-size:9px">(${sanitise(u.role)})</span>
+              </span>`).join('')}
+          </div>
+        </div>` : ''}
+      </div>`;
+  } catch(e) {
+    console.warn('[Accountability widget]', e.message);
+  }
+}
+// ═══════════════════════════════════════════════════════════════════════════
+
 async function pgDashboard() {
   const dash = await api('GET', '/api/analytics/dashboard').catch(() => ({}));
   const allowed = allowedPages().map(p => p.id);
@@ -2339,6 +2699,7 @@ async function pgDashboard() {
     </div>` : ''}
 
     ${['super_admin','admin','real_admin'].includes(user.role) ? `<div id="access-log-widget"></div>` : ''}
+    <div id="accountability-admin-widget"></div>
     <div id="pending-age-widget"></div>
     <div id="imprest-alert-widget"></div>
     <div id="compliance-widget"></div>
@@ -2360,6 +2721,11 @@ async function pgDashboard() {
   // Load pending requests ageing summary for visibility
   if (['super_admin','accounts','haulage_manager','operations_manager'].includes(user?.role)) {
     loadPendingAgeWidget();
+  }
+
+  // Load accountability follow-up widget for managers
+  if (['super_admin','admin','haulage_manager','operations_manager','hr'].includes(user?.role)) {
+    loadAccountabilityAdminWidget();
   }
 
   // Load compliance alerts quietly in the background
@@ -12194,18 +12560,28 @@ function showConfirmModal(title, message, onConfirm, opts = {}) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 function showModal(title, body, size) {
+  // size can be 'lg', or an options object { noDismiss: true, size: 'lg' }
+  const opts = typeof size === 'object' ? size : {};
+  const sizeVal = typeof size === 'string' ? size : (opts.size || '');
+  const noDismiss = !!opts.noDismiss;
+
   const existing = el('modal-overlay');
   if (existing) existing.remove();
   const d = document.createElement('div');
   d.id = 'modal-overlay';
   d.className = 'modal-overlay';
-  const wideStyle = size === 'lg' ? 'max-width:900px;width:95vw' : '';
+  const wideStyle = sizeVal === 'lg' ? 'max-width:900px;width:95vw' : '';
+  const closeBtn = noDismiss
+    ? '' // No X button on non-dismissible modals
+    : '<button class="modal-close" onclick="closeModal()">✕</button>';
   d.innerHTML = `<div class="modal" style="${wideStyle}">
     <div class="modal-handle"></div>
-    <div class="modal-title">${title}<button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-title">${title}${closeBtn}</div>
     ${body}
   </div>`;
-  d.addEventListener('click', e => { if(e.target===d) closeModal(); });
+  if (!noDismiss) {
+    d.addEventListener('click', e => { if(e.target===d) closeModal(); });
+  }
   document.body.appendChild(d);
 }
 function closeModal() {
