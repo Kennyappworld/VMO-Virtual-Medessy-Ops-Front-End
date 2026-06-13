@@ -12838,15 +12838,18 @@ function closeModal() {
 // ── SEED CACHE WITH DUMMY DATA (renders instantly, replaced by real data) ──────
 function seedCache() {
   const now = Date.now() - 999999; // mark as stale so real data fetches in background
+  // Dashboard seed intentionally uses zero for all financial figures
+  // to avoid showing misleading numbers before the real API responds.
+  // Non-financial counts (fleet, drivers) use zeros too for consistency.
   cache['GET/api/analytics/dashboard'] = { ts: now, data: {
-    pending: { count: 8, total: 2450000 },
-    paid_30d: { count: 24, total: 8200000 },
-    receivables: { count: 5, total: 3600000 },
-    imprest_total: 1250000,
-    fleet: 12,
-    drivers: 18,
-    pending_fuel: 3,
-    overdue: { count: 2, total: 680000 }
+    pending:      { count: 0, total: 0 },
+    paid_30d:     { count: 0, total: 0 },
+    receivables:  { count: 0, total: 0 },
+    imprest_total: 0,
+    fleet:        0,
+    drivers:      0,
+    pending_fuel: 0,
+    overdue:      { count: 0, total: 0 }
   }};
   cache['GET/api/chat/groups'] = { ts: now, data: [
     { id: 0, name: 'General', is_member: true, is_dm: false, closed: false },
