@@ -2191,7 +2191,7 @@ async function loadPendingAgeWidget() {
                         border-radius:0 8px 8px 0;padding:10px 12px;cursor:pointer"
               onclick="navigate('${item.nav}')">
               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-                ${isTop ? `<span style="font-size:9px;font-weight:700;padding:1px 7px;border-radius:10px;background:${headerColor};color:#fff;text-transform:uppercase;letter-spacing:.5px">Most Delayed</span>` : ''}
+                ${isTop ? `<span style="font-size:9px;font-weight:700;padding:1px 7px;border-radius:10px;background:${headerColor};color:#fff;text-transform:uppercase;letter-spacing:.5px">Longest Waiting</span>` : ''}
                 <span style="font-size:11px;font-weight:700;color:var(--text)">${sanitise(item.ref)}</span>
                 <span style="font-size:10px;padding:1px 7px;border-radius:10px;background:rgba(255,255,255,.07);color:var(--text3)">${sanitise(item.type)}</span>
                 <span style="margin-left:auto;font-size:12px;font-weight:700;color:${a.color}">${fmt(item.amount)}</span>
@@ -2254,7 +2254,7 @@ function showAccountabilityModal(data) {
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const userName = user?.full_name?.split(' ')[0] || 'there';
   const openItems = data.open_items || [];
-  const sysPending = data.system_pending || [];
+  const sysPending = data.flaggedItems || [];
   const hasAnyPending = openItems.length > 0 || sysPending.length > 0;
   const fmt = d => d ? new Date(d).toLocaleDateString('en-GB', { day:'2-digit', month:'short' }) : '—';
 
@@ -2287,7 +2287,7 @@ function showAccountabilityModal(data) {
         </div>`).join('')}
     </div>` : ''}
 
-    <!-- System-detected pending items -->
+    <!-- Items flagged by the system -->
     ${sysPending.length > 0 ? `
     <div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.25);border-radius:10px;padding:12px 14px;margin-bottom:14px">
       <div style="font-weight:700;color:var(--amber,#f59e0b);font-size:13px;margin-bottom:8px">
@@ -2303,7 +2303,7 @@ function showAccountabilityModal(data) {
     <!-- The question -->
     <div style="background:var(--bg2);border-radius:10px;padding:14px 16px;margin-bottom:16px">
       <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">
-        Do you have any pending tasks or incomplete deliverables as at end of business yesterday?
+        Is there anything outstanding from yesterday that you\'re still working on?
       </div>
       <div style="font-size:12px;color:var(--text3);line-height:1.6">
         Be honest — this keeps the team aligned and helps management support you. 
@@ -2327,10 +2327,10 @@ function showAccountabilityModal(data) {
     <!-- Action buttons -->
     <div id="acct-action-btns" style="display:flex;gap:10px">
       <button class="btn btn-success" style="flex:1" onclick="submitAccountabilityCheck(false)">
-        <i class="ti ti-circle-check"></i> All Clear — No Pending Items
+        <i class="ti ti-circle-check"></i> All good — nothing outstanding
       </button>
       <button class="btn btn-danger" style="flex:1" onclick="showAccountabilityItemForm()">
-        <i class="ti ti-alert-triangle"></i> Yes, I Have Pending Items
+        <i class="ti ti-alert-triangle"></i> Yes, I have something to log
       </button>
     </div>
     <div style="text-align:center;margin-top:10px;font-size:11px;color:var(--text3)">
@@ -2339,7 +2339,7 @@ function showAccountabilityModal(data) {
   `;
 
   // Show in a non-dismissible modal (no X button, no click-outside-to-close)
-  showModal('Daily Accountability Check', modalContent, { noDismiss: true });
+  showModal('Daily Check-In', modalContent, { noDismiss: true });
 }
 
 let _acctItemCount = 0;
@@ -2939,7 +2939,7 @@ async function maintenanceApprove(id) {
 
 async function confirmPay(id) {
   const imp = el('pay-imp')?.value || null;
-  try { clearCache(); await api('PATCH', `/api/requests/${id}/pay`, { imprest_id: imp }); closeModal(); navigate('requests'); } catch(e) { showToast(e.message, 'info'); }
+  try { clearCache(); await api('PATCH', `/api/requests/${id}/pay`, { imprest_id: imp }); closeModal(); navigate('requests'); } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function showNewRequest() {
@@ -3241,7 +3241,7 @@ async function submitRequest() {
       priority: el('nr-priority')?.value || 'normal',
     });
     closeModal(); navigate('requests');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 // ── FUEL ──────────────────────────────────────────────────────────────────────
@@ -5678,7 +5678,7 @@ async function confirmReceipt(requestId, btn) {
   try {
     await api('PATCH', '/api/requests/' + requestId + '/confirm-receipt');
     if (btn) { btn.textContent = '\u2705 Confirmed'; btn.style.background = 'var(--green)'; }
-  } catch(e) { showToast(e.message, 'info'); if (btn) btn.disabled = false; }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); if (btn) btn.disabled = false; }
 }
 
 async function requestReceipt(requestId, btn) {
@@ -5686,7 +5686,7 @@ async function requestReceipt(requestId, btn) {
   try {
     await api('POST', '/api/requests/' + requestId + '/request-receipt');
     if (btn) { btn.textContent = '\ud83d\udce9 Sent'; btn.style.background = 'var(--amber)'; }
-  } catch(e) { showToast(e.message, 'info'); if (btn) btn.disabled = false; }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); if (btn) btn.disabled = false; }
 }
 
 function updateReceiptThreshold() {
@@ -5728,7 +5728,7 @@ async function submitMonthlyReport() {
     });
     closeModal();
     showToast('\u2705 Monthly report submitted!', 'info');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function pgVehicles() {
@@ -6188,7 +6188,7 @@ async function submitVehicle() {
     await api('POST', '/api/vehicles', payload);
     closeModal();
     navigate('vehicles');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 // ── DRIVERS ───────────────────────────────────────────────────────────────────
@@ -6295,7 +6295,7 @@ function showNewDriver() {
 }
 async function submitDriver() {
   try { clearCache(); await api('POST', '/api/drivers', { full_name: el('nd-name').value, phone: el('nd-phone').value, license_number: el('nd-lic').value,
-      license_class: el('nd-lclass')?.value||'', license_expiry: el('nd-licexp').value||null, bank_name: el('nd-bank').value, account_number: el('nd-acct').value, account_name: el('nd-aname').value, depot: el('nd-depot').value }); closeModal(); navigate('drivers'); } catch(e) { showToast(e.message, 'info'); }
+      license_class: el('nd-lclass')?.value||'', license_expiry: el('nd-licexp').value||null, bank_name: el('nd-bank').value, account_number: el('nd-acct').value, account_name: el('nd-aname').value, depot: el('nd-depot').value }); closeModal(); navigate('drivers'); } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 // ── COMPLIANCE ────────────────────────────────────────────────────────────────
@@ -6656,7 +6656,7 @@ async function submitClient() {
       designation: el('nc-desig')?.value,
     });
     closeModal(); navigate('clients');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 function showEditClient(id) {
@@ -6693,7 +6693,7 @@ async function submitEditClient(id) {
       designation: el('ec-desig')?.value,
     });
     closeModal(); showToast('Client updated','success'); navigate('clients');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 
@@ -6858,7 +6858,7 @@ function showNewReceivable() {
     </div>`);
 }
 async function submitReceivable() {
-  try { clearCache(); await api('POST', '/api/receivables', { client_id: el('nrv-client').value, invoice_number: el('nrv-inv').value, amount: el('nrv-amt').value, due_date: el('nrv-due').value, description: el('nrv-desc').value }); closeModal(); navigate('receivables'); } catch(e) { showToast(e.message, 'info'); }
+  try { clearCache(); await api('POST', '/api/receivables', { client_id: el('nrv-client').value, invoice_number: el('nrv-inv').value, amount: el('nrv-amt').value, due_date: el('nrv-due').value, description: el('nrv-desc').value }); closeModal(); navigate('receivables'); } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 async function confirmReceipt(id) {
   showConfirmModal('Confirm Receipt', 'Mark this payment as received?', async () => {
@@ -7166,7 +7166,7 @@ async function submitNewImprest() {
     pgImprest();
   } catch(e) {
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-wallet"></i> Create Account'; }
-    showToast(e.message || 'Could not create account', 'error');
+    showToast(e.message || 'Could not create the account — please try again', 'error');
   }
 }
 
@@ -7318,7 +7318,7 @@ async function saveLocation(id) {
     }
     closeModal();
     pgLocations();
-  } catch(e) { showToast(e.message, 'error'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function deleteLocation(id, name) {
@@ -7328,7 +7328,7 @@ async function deleteLocation(id, name) {
       await api('DELETE', `/api/store/locations/${id}`);
       showToast('Location removed. Inventory items here are unaffected.', 'success');
       pgLocations();
-    } catch(e) { showToast(e.message, 'error'); }
+    } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   }, { danger: true });
 }
 
@@ -7543,7 +7543,7 @@ async function saveLinkImprestVendor(accountId) {
     closeModal();
     showToast(vendorId ? 'Imprest linked to vendor — Fuel Float created ✓' : 'Vendor link removed ✓', 'success');
     pgImprest();
-  } catch(e) { showToast(e.message, 'error'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function showImprestIssuanceLog(accountId, vendorName) {
@@ -7650,7 +7650,7 @@ async function submitImprest() {
       original_balance: el('ni-bal')?.value || 0,
     });
     closeModal(); navigate('imprest');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 
@@ -7951,7 +7951,7 @@ function showFundImprest(id, name) {
     </div>`);
 }
 async function submitFund(id) {
-  try { clearCache(); await api('PATCH', `/api/imprest/${id}/fund`, { amount: el('fi-amt')?.value, description: el('fi-desc')?.value, source: el('fi-source')?.value }); closeModal(); navigate('imprest'); } catch(e) { showToast(e.message, 'info'); }
+  try { clearCache(); await api('PATCH', `/api/imprest/${id}/fund`, { amount: el('fi-amt')?.value, description: el('fi-desc')?.value, source: el('fi-source')?.value }); closeModal(); navigate('imprest'); } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 function showRetireImprest(id, name, balance) {
@@ -8042,9 +8042,9 @@ async function submitRetirement(accountId) {
       expenses_breakdown: JSON.stringify(expenses),
     });
     closeModal();
-    showToast('Retirement submitted — awaiting Accounts approval', 'success');
+    showToast('Retirement submitted — it'll be reviewed shortly — awaiting Accounts approval', 'success');
     navigate('imprest');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function approveRetirement(id) {
@@ -8053,7 +8053,7 @@ async function approveRetirement(id) {
     await api('PATCH', `/api/imprest/retirements/${id}/approve`);
     showToast('✅ Retirement approved', 'success');
     navigate('imprest');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 
@@ -8063,7 +8063,7 @@ async function declineRetirement(id) {
       await api('PATCH', `/api/imprest/retirements/${id}/decline`, { reason });
     showToast('Retirement declined', 'error');
     navigate('imprest');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 
@@ -8119,7 +8119,7 @@ async function pgReservations() {
   `);
 }
 async function approveRes(id) {
-  try { clearCache(); await api('PATCH', `/api/reservations/${id}/approve`); navigate('reservations'); } catch(e) { showToast(e.message, 'info'); }
+  try { clearCache(); await api('PATCH', `/api/reservations/${id}/approve`); navigate('reservations'); } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 function showNewReservation() {
   showModal('New Pool Car Reservation', `
@@ -8144,7 +8144,7 @@ async function submitReservation() {
     clearCache();
     await api('POST', '/api/reservations', { vehicle_id: pveh[0].id, start_date: el('nr2-start')?.value, end_date: el('nr2-end')?.value, client_name: el('nr2-client')?.value, client_phone: el('nr2-phone')?.value, purpose: el('nr2-purpose')?.value });
     closeModal(); navigate('reservations');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 // ── VIRTUAL STORE (Inventory — Enhanced) ──────────────────────────────────────
@@ -8320,7 +8320,7 @@ async function submitInventory() {
       specification: el('inv-spec')?.value,
     });
     closeModal(); navigate('inventory');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 // Issue item = Stock Requisition Note (SRN)
@@ -8371,7 +8371,7 @@ async function submitIssueItem(id) {
       driver_id: el('is-driver')?.value||null, purpose, notes: el('is-notes')?.value,
     });
     closeModal(); navigate('inventory');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 // Receive stock = Goods Received Note (GRN)
@@ -8458,7 +8458,7 @@ async function submitReceiveStock() {
     });
     closeModal(); navigate('inventory');
     showToast(`✅ GRN created — ${qty} units added`, 'success');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function showItemHistory(id, name) {
@@ -8520,7 +8520,7 @@ async function softDeleteItem(id, name) {
     await api('DELETE', `/api/inventory/${id}`, { reason });
     showToast(`"${name}" removed from store. Audit record retained.`, 'success');
     navigate('inventory');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 
@@ -8560,7 +8560,7 @@ async function restoreItem(id, name) {
     await api('PATCH', `/api/inventory/${id}/restore`);
     showToast(`"${name}" restored to store`, 'success');
     navigate('inventory');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 
@@ -8784,7 +8784,7 @@ async function sendChatMsg() {
     });
     cancelReply();
     await loadChatGroup(activeGroupId);
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 function triggerFileUpload() {
@@ -8890,7 +8890,7 @@ async function submitCreateGroup() {
     await api('POST', '/api/chat/groups', { name, members });
     closeModal();
     navigate('chat');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 function showDMUser() {
@@ -8928,44 +8928,101 @@ async function startDM(toUserId, toUserName) {
     activeGroupId = g.id;
     activeGroupName = g.name;
     navigate('chat');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 // ── USERS ─────────────────────────────────────────────────────────────────────
 // pgUsers defined below
 
-function showNewUser() {
-  showModal('Create User', `
+async function showNewUser() {
+  // Load departments for the dropdown
+  let deptOptions = '<option value="">— Select Department —</option>';
+  try {
+    const depts = await api('GET', '/api/departments').catch(() => []);
+    if (Array.isArray(depts) && depts.length) {
+      deptOptions += depts.map(d => `<option value="${d.id}">${sanitise(d.name)}</option>`).join('');
+    }
+  } catch(e) {}
+
+  showModal('Add New User', `
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Full Name</label><input class="form-input" id="nu-name" placeholder="John Doe"></div>
-      <div class="form-group"><label class="form-label">Email</label><input class="form-input" type="email" id="nu-email" placeholder="john@medessy.com"></div>
+      <div class="form-group">
+        <label class="form-label">Full Name</label>
+        <input class="form-input" id="nu-name" placeholder="e.g. Amaka Okafor" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email Address</label>
+        <input class="form-input" type="email" id="nu-email" placeholder="amaka@medessy.ng" autocomplete="off">
+      </div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Password</label><input class="form-input" type="password" id="nu-pass" placeholder="Min 8 chars"></div>
-      <div class="form-group"><label class="form-label">Role</label>
+      <div class="form-group">
+        <label class="form-label">Temporary Password</label>
+        <input class="form-input" type="password" id="nu-pass" placeholder="At least 8 characters" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Role</label>
         <select class="form-input" id="nu-role">
-          <option value="staff">Staff</option><option value="hr">HR</option>
-          <option value="accounts">Accounts</option><option value="admin">Admin</option>
-          <option value="compliance">Compliance</option><option value="driver">Driver</option>
+          <option value="staff">Staff</option>
+          <option value="hr">HR</option>
+          <option value="accounts">Accounts</option>
+          <option value="compliance">Compliance</option>
+          <option value="driver">Driver</option>
+          <option value="store_keeper">Store Keeper</option>
+          <option value="maintenance_manager">Maintenance Manager</option>
           <option value="operations_manager">Operations Manager</option>
-          <option value="haulage_ops_manager">Haulage Operations Manager</option>
-          <option value="pool_ops_manager">Pool Operations Manager</option>
+          <option value="haulage_manager">Haulage Manager</option>
+          <option value="admin">Admin</option>
           <option value="super_admin">Super Admin</option>
-        <option value="real_admin">Real Admin (System Owner)</option>
-        </select></div>
+        </select>
+      </div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Department</label><input class="form-input" id="nu-dept" placeholder="Finance"></div>
-      <div class="form-group"><label class="form-label">Depot</label>
-        <select class="form-input" id="nu-depot"><option>Lagos</option><option>Benin</option><option>Onitsha</option></select></div>
+      <div class="form-group">
+        <label class="form-label">Department</label>
+        <select class="form-input" id="nu-dept-id">${deptOptions}</select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Depot / Location</label>
+        <select class="form-input" id="nu-depot">
+          <option>Lagos</option><option>Benin</option><option>Onitsha</option><option>Abuja</option><option>Port Harcourt</option>
+        </select>
+      </div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:4px">
-      <button class="btn btn-primary btn-block" onclick="submitUser()">Create User</button>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-primary btn-block" id="nu-submit-btn" onclick="submitUser()">
+        <i class="ti ti-user-plus"></i> Create Account
+      </button>
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-    </div>`);
+    </div>
+    <p style="font-size:11px;color:var(--text3);margin-top:8px;text-align:center">
+      The user will be able to log in immediately with the password above.
+    </p>`);
 }
 async function submitUser() {
-  try { clearCache(); await api('POST', '/api/users', { name: el('nu-name').value, email: el('nu-email').value, password: el('nu-pass').value, role: el('nu-role').value, department: el('nu-dept').value, depot: el('nu-depot').value }); closeModal(); navigate('users'); } catch(e) { showToast(e.message, 'info'); }
+  const btn = el('nu-submit-btn');
+  const name = el('nu-name')?.value?.trim();
+  const email = el('nu-email')?.value?.trim();
+  const password = el('nu-pass')?.value;
+  const role = el('nu-role')?.value;
+  const department_id = el('nu-dept-id')?.value || undefined;
+  const depot = el('nu-depot')?.value || 'Lagos';
+
+  if (!name)     { showToast('Please enter the staff member\'s full name', 'warning'); return; }
+  if (!email)    { showToast('Please enter a valid email address', 'warning'); return; }
+  if (!password || password.length < 8) { showToast('Password must be at least 8 characters', 'warning'); return; }
+
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader ti-spin"></i> Creating…'; }
+  try {
+    clearCache();
+    await api('POST', '/api/users', { name, email, password, role, department_id, depot });
+    closeModal();
+    showToast(`${name}'s account has been created successfully`, 'success');
+    navigate('users');
+  } catch(e) {
+    showToast(e.message || 'Could not create account — please try again', 'error');
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-user-plus"></i> Create Account'; }
+  }
 }
 
 // ── HISTORY & EXPORT ─────────────────────────────────────────────────────────
@@ -9697,7 +9754,7 @@ async function submitBudgetItem(editId) {
     pgBudget();
   } catch(e) {
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-device-floppy"></i> Save Budget'; }
-    showToast(e.message, 'error');
+    showToast(e.message || 'Something went wrong — please try again', 'error');
   }
 }
 
@@ -9705,14 +9762,14 @@ async function approveBudgetItem(id) {
   try {
     await api('PATCH', `/api/budget/items/${id}`, { status: 'approved' });
     clearCache(); showToast('Budget item approved ✓', 'success'); pgBudget();
-  } catch(e) { showToast(e.message, 'error'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function declineBudgetItem(id) {
   try {
     await api('PATCH', `/api/budget/items/${id}`, { status: 'declined' });
     clearCache(); showToast('Budget item declined', 'success'); pgBudget();
-  } catch(e) { showToast(e.message, 'error'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function deleteBudgetItem(id) {
@@ -9720,7 +9777,7 @@ async function deleteBudgetItem(id) {
   try {
     await api('DELETE', `/api/budget/items/${id}`);
     clearCache(); showToast('Removed ✓', 'success'); pgBudget();
-  } catch(e) { showToast(e.message, 'error'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 
@@ -9763,7 +9820,7 @@ async function addBudgetCategory() {
     clearCache();
     showToast('Category added ✓', 'success');
     showManageBudgetCategories();
-  } catch(e) { showToast(e.message, 'error'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function deleteBudgetCategory(name) {
@@ -9773,7 +9830,7 @@ async function deleteBudgetCategory(name) {
     clearCache();
     showToast('Category removed ✓', 'success');
     showManageBudgetCategories();
-  } catch(e) { showToast(e.message, 'error'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 
@@ -9944,7 +10001,7 @@ async function submitCreateVendorUser(vendorId) {
       </div>
       <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="closeModal();pgVendorPortal()">Done</button>
     `);
-  } catch(e) { showToast(e.message, 'error'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function toggleVendorUser(userId, newStatus) {
@@ -9953,14 +10010,14 @@ async function toggleVendorUser(userId, newStatus) {
     clearCache();
     showToast(newStatus === 'suspended' ? 'Account suspended' : 'Account reactivated ✓', 'success');
     pgVendorPortal();
-  } catch(e) { showToast(e.message, 'error'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function resendVendorCredentials(userId) {
   try {
     await api('POST', `/api/vendor-users/${userId}/resend`);
     showToast('Credentials resent ✓', 'success');
-  } catch(e) { showToast(e.message, 'error'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 
@@ -10345,7 +10402,7 @@ async function submitInvoice() {
     delete cache['GET/api/invoices'];
     closeModal();
     await pgInvoices();
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function markInvoiceReceived(id) {
@@ -10354,7 +10411,7 @@ async function markInvoiceReceived(id) {
     await api('PATCH', `/api/invoices/${id}/receive`);
     delete cache['GET/api/invoices'];
     await pgInvoices();
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 
@@ -10600,7 +10657,7 @@ async function submitNewCompany() {
     clearCache();
     await api('POST','/api/companies',{name:el('nc-name').value,type:el('nc-type').value,diesel_price_per_litre:990});
     closeModal(); navigate('companies');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function manageCompanyVehicles(compId, compName) {
@@ -10645,13 +10702,13 @@ async function addVehicleToCompany(compId) {
   const vehId = el('add-veh-sel')?.value;
   if (!vehId) return showToast('Select a vehicle first', 'info');
   try { clearCache(); await api('POST',`/api/companies/${compId}/vehicles`,{vehicle_id:vehId});
-    closeModal(); navigate('companies'); } catch(e) { showToast(e.message, 'info'); }
+    closeModal(); navigate('companies'); } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function removeVehicleFromCompany(compId, vehId, compName) {
   showConfirmModal('Remove Vehicle', 'Remove this vehicle from the unit?', async () => {
   try { clearCache(); await api('DELETE',`/api/companies/${compId}/vehicles/${vehId}`);
-    closeModal(); navigate('companies'); } catch(e) { showToast(e.message, 'info'); }
+    closeModal(); navigate('companies'); } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 
@@ -10685,13 +10742,13 @@ async function addDriverToCompany(compId) {
   const drvId = el('add-drv-sel')?.value;
   if (!drvId) return showToast('Select a driver first', 'info');
   try { clearCache(); await api('POST',`/api/companies/${compId}/drivers`,{driver_id:drvId});
-    closeModal(); navigate('companies'); } catch(e) { showToast(e.message, 'info'); }
+    closeModal(); navigate('companies'); } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function removeDriverFromCompany(compId, drvId, compName) {
   showConfirmModal('Remove Driver', 'Remove this driver from the unit?', async () => {
   try { clearCache(); await api('DELETE',`/api/companies/${compId}/drivers/${drvId}`);
-    closeModal(); navigate('companies'); } catch(e) { showToast(e.message, 'info'); }
+    closeModal(); navigate('companies'); } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 
@@ -10717,7 +10774,7 @@ async function submitDieselPrice(compId) {
     await api('PATCH',`/api/companies/${compId}/diesel-price`,{price:el('new-diesel').value,date:el('diesel-date').value});
     closeModal(); navigate('companies');
     showToast('✅ Diesel price updated and logged in audit trail', 'success');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function showFixedCosts(compId, compName) {
@@ -10782,7 +10839,7 @@ async function saveFixedCosts(compId) {
     });
     closeModal();
     showToast('✅ Fixed costs saved', 'success');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 // ── TRIP LOG ──────────────────────────────────────────────────────────────────
@@ -11826,7 +11883,7 @@ async function submitCloseTrip(tripId) {
     await api('PATCH', `/api/trips/${tripId}`, payload);
     clearWaybillFiles('ct-wb-files');
     closeModal();
-    showToast('Trip closed ✅ Truck is now free for next load', 'success');
+    showToast('Trip closed — the truck is ready for its next load ✅ Truck is now free for next load', 'success');
     navigate('trips');
   } catch(e) {
     showToast(e.message || 'Trip closure failed. Please attach the closing waybill and try again.', 'error');
@@ -12518,7 +12575,7 @@ async function submitTrip() {
       notes: el('nt-notes')?.value,
     });
     closeModal(); loadTripsForCompany();
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 
@@ -13838,7 +13895,7 @@ async function submitIssueComment(id) {
   try {
     await api('POST', `/api/issues/${id}/comments`, { comment });
     await openIssue(id);
-  } catch(e) { showToast(e.message, 'error'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function resolveIssue(id) {
@@ -13848,7 +13905,7 @@ async function resolveIssue(id) {
     closeModal();
     showToast('✅ Issue marked resolved', 'success');
     navigate('issues');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function reopenIssue(id) {
@@ -13857,7 +13914,7 @@ async function reopenIssue(id) {
     closeModal();
     showToast('Issue reopened', 'success');
     navigate('issues');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 function showNewIssue() {
@@ -14022,7 +14079,7 @@ async function submitDept() {
   try {
     await api('POST', '/api/departments', { name, description: document.getElementById('nd-desc')?.value, color: document.getElementById('nd-color')?.value });
     closeModal(); navigate('departments');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 function editDepartment(id, name, desc, color) {
@@ -14039,11 +14096,11 @@ async function updateDept(id) {
   try {
     await api('PUT', `/api/departments/${id}`, { name: document.getElementById('ed-name')?.value, description: document.getElementById('ed-desc')?.value, color: document.getElementById('ed-color')?.value });
     closeModal(); navigate('departments');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 async function deleteDept(id, name) {
   showConfirmModal('Delete Department', `Delete department "<strong>${name}</strong>"? Members will not be deleted.`, async () => {
-  try { await api('DELETE', `/api/departments/${id}`); navigate('departments'); } catch(e) { showToast(e.message, 'info'); }
+  try { await api('DELETE', `/api/departments/${id}`); navigate('departments'); } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 function filterUsersByDept(dept) { navigate('users'); }
@@ -14369,9 +14426,9 @@ async function submitEditUserFull(id) {
       await api('PATCH', `/api/users/${id}/password`, { password: pass }).catch(() => {});
     }
     closeModal();
-    showToast('User updated successfully', 'success');
+    showToast('Profile updated successfully', 'success');
     navigate('users');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 function showManageRoles() {
@@ -14537,7 +14594,7 @@ async function confirmApproveSignup(id) {
         </button>` : ''}
       </div>
       <button class="btn btn-ghost btn-block" style="margin-top:8px" onclick="closeModal();navigate('users')">Done</button>`);
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function resendCredentials(userId, email) {
@@ -14551,7 +14608,7 @@ async function resendCredentials(userId, email) {
         : `New password: ${result.new_password} — delivery failed, share manually`,
       d.email || d.whatsapp ? 'success' : 'error'
     );
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 
@@ -14561,7 +14618,7 @@ async function rejectSignup(id) {
       await api('PATCH', `/api/signup-requests/${id}/reject`, { reason });
     showToast('Signup request rejected', 'error');
     navigate('users');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
   });
 }
 
@@ -14603,9 +14660,9 @@ async function submitEditUser(id) {
       depot: document.getElementById('eu-depot')?.value,
     });
     closeModal();
-    showToast('User updated', 'success');
+    showToast('Profile updated', 'success');
     navigate('users');
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 async function resetUserPassword(id, name) {
@@ -14700,7 +14757,7 @@ async function submitSignupRequest() {
     document.getElementById('signup-form').style.display = 'none';
     document.getElementById('signup-success').style.display = 'block';
   } catch(e) {
-    showToast(e.message, 'error');
+    showToast(e.message || 'Something went wrong — please try again', 'error');
   }
 }
 
@@ -15566,7 +15623,7 @@ async function saveNewStaffBus() {
     });
     if (typeof closeModal === 'function') closeModal();
     renderStaffBusEntry();
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -16310,7 +16367,7 @@ async function saveServiceUpdate(vehicleId) {
     if (typeof closeModal === 'function') closeModal();
     if (typeof showToast === 'function') showToast('🔧 Service record updated', 'success');
     renderMaintenanceDash();
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 function showAddVehicleServiceModal() {
@@ -16367,7 +16424,7 @@ async function saveNewVehicleMaint() {
     if (typeof closeModal === 'function') closeModal();
     if (typeof showToast === 'function') showToast('Vehicle added to maintenance tracker', 'success');
     renderMaintenanceDash();
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -16441,7 +16498,7 @@ async function addSubscription() {
   try {
     await api('POST', '/api/availability/report-subscriptions', { email, name, report_type: type });
     renderSubscriptions();
-  } catch(e) { showToast(e.message, 'info'); }
+  } catch(e) { showToast(e.message || 'Something went wrong — please try again', 'error'); }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
